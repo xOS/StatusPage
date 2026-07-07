@@ -29,17 +29,21 @@ export const Refresh = async ctx => {
     return;
   }
 
-  const [status] = await Promise.all([
-    ctx.services.uptimerobot.refreshStatusPageCache(days),
-    ctx.services.uptimerobot.prefetchList()
-  ]);
+  if (ctx.query.async === "1" || ctx.query.async === "true") {
+    ctx.status = 202;
+    ctx.body = {
+      ok: true,
+      accepted: true,
+      days,
+      savedAt: Date.now()
+    };
+    ctx.services.uptimerobot.refreshStatusPageCache(days).catch(() => {});
+    return;
+  }
 
-  ctx.body = {
-    ok: true,
-    days,
-    savedAt: Date.now(),
-    status
-  };
+  const status = await ctx.services.uptimerobot.refreshStatusPageCache(days);
+
+  ctx.body = refreshSummary(status, days);
 };
 
 export const Info = async ctx => {
@@ -94,4 +98,15 @@ function isRefreshAuthorized(ctx, allowWithoutToken) {
 
   const auth = ctx.get("authorization");
   return auth === `Bearer ${token}` || ctx.query.token === token;
+}
+
+function refreshSummary(status, days) {
+  return {
+    ok: true,
+    days,
+    savedAt: Date.now(),
+    groups: Object.keys(status.monitors || {}).length,
+    monitors: Object.values(status.monitors || {}).reduce((sum, monitors) => sum + monitors.length, 0),
+    logs: (status.logs || []).length
+  };
 }

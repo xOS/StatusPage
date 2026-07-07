@@ -107,6 +107,14 @@ GET /api/status?days=90
 GET /api/refresh?days=90&token=your-token
 ```
 
+该接口只返回刷新摘要，不返回完整状态数据，适合 UptimeRobot、Vercel Cron、GitHub Actions 等定时器调用。
+
+如果调用方超时时间很短，可加 `async=1` 让接口立即返回 `202 Accepted`，刷新任务在后台执行：
+
+```http
+GET /api/refresh?async=1&token=your-token
+```
+
 ### `GET /api/info`
 
 新版 UI 使用的运行时站点配置接口，同时保留旧字段 `name`、`avatar`、`desc` 和 `rtl` 以兼容旧前端。
@@ -193,7 +201,7 @@ WEBSITE_FOOTER_OWNER=楠格
 
 Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/api/status`。函数环境没有常驻 cron，数据会在函数实例内按请求缓存，默认 60 秒。
 
-项目已在 `vercel.json` 配置 Vercel Cron，每天请求一次 `/api/status` 来预热状态快照。Vercel Hobby 计划只允许 daily cron；如果需要 5 分钟级别刷新，可用 UptimeRobot、GitHub Actions 或其他外部定时器请求 `/api/refresh`。
+项目已在 `vercel.json` 配置 Vercel Cron，每天请求一次 `/api/refresh` 来预热状态快照。Vercel Hobby 计划只允许 daily cron；如果需要 5 分钟级别刷新，可用 UptimeRobot、GitHub Actions 或其他外部定时器请求 `/api/refresh`。
 
 ## Cloudflare Pages 部署
 

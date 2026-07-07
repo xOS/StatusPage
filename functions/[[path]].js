@@ -43,13 +43,18 @@ export async function onRequest(context) {
       }
 
       const days = Number(url.searchParams.get("days") || DAYS);
+      if (url.searchParams.get("async") === "1" || url.searchParams.get("async") === "true") {
+        context.waitUntil(refreshStatusCache(context, env, days, `status:${days}`).catch(() => {}));
+        return json({
+          ok: true,
+          accepted: true,
+          days,
+          savedAt: Date.now()
+        }, { "cache-control": "no-store" }, 202);
+      }
+
       const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
-      return json({
-        ok: true,
-        days,
-        savedAt: Date.now(),
-        status: refreshed.data
-      }, { "cache-control": "no-store" });
+      return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
     }
 
     if (url.pathname === "/api/info") {
@@ -67,6 +72,17 @@ function statusCacheHeaders(entry, now, missed = false) {
     "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=604800",
     "x-status-cache": missed ? "MISS" : entry.expiresAt > now ? "HIT" : "STALE",
     "x-status-cache-saved-at": String(entry.savedAt)
+  };
+}
+
+function refreshSummary(status, days) {
+  return {
+    ok: true,
+    days,
+    savedAt: Date.now(),
+    groups: Object.keys(status.monitors || {}).length,
+    monitors: Object.values(status.monitors || {}).reduce((sum, monitors) => sum + monitors.length, 0),
+    logs: (status.logs || []).length
   };
 }
 

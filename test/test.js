@@ -55,6 +55,36 @@ test.serial("GET /api/refresh requires token", async t => {
   t.is(res.status, 401);
 });
 
+test.serial("GET /api/refresh returns summary only", async t => {
+  const scope = mockSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh?token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 200);
+  t.true(res.body.ok);
+  t.is(res.body.days, 90);
+  t.is(res.body.groups, 3);
+  t.is(res.body.monitors, 5);
+  t.false(Object.prototype.hasOwnProperty.call(res.body, "status"));
+  scope.persist(false);
+});
+
+test.serial("GET /api/refresh supports async response", async t => {
+  const scope = mockSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh?async=1&token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 202);
+  t.true(res.body.ok);
+  t.true(res.body.accepted);
+  t.false(Object.prototype.hasOwnProperty.call(res.body, "status"));
+  scope.persist(false);
+});
+
 test.serial("GET /api/info", async t => {
   const res = await superkoa(t.context.app).get("/api/info");
   t.is(res.status, 200);
