@@ -107,12 +107,12 @@ GET /api/status?days=90
 GET /api/refresh?days=90&token=your-token
 ```
 
-该接口只返回刷新摘要，不返回完整状态数据，适合 UptimeRobot、Vercel Cron、GitHub Actions 等定时器调用。
+该接口默认立即返回 `202 Accepted`，刷新任务在后台执行，适合 UptimeRobot、Vercel Cron、GitHub Actions 等定时器调用。
 
-如果调用方超时时间很短，可加 `async=1` 让接口立即返回 `202 Accepted`，刷新任务在后台执行：
+如果需要同步等待刷新结果，可加 `wait=1`。同步模式只返回刷新摘要，不返回完整状态数据：
 
 ```http
-GET /api/refresh?async=1&token=your-token
+GET /api/refresh?wait=1&token=your-token
 ```
 
 ### `GET /api/info`

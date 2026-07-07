@@ -59,7 +59,7 @@ test.serial("GET /api/refresh returns summary only", async t => {
   const scope = mockSucc();
   process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
   const res = await superkoa(t.context.app)
-    .get("/api/refresh?token=test-refresh-token");
+    .get("/api/refresh?wait=1&token=test-refresh-token");
   delete process.env.CACHE_REFRESH_TOKEN;
 
   t.is(res.status, 200);
@@ -75,7 +75,7 @@ test.serial("GET /api/refresh supports async response", async t => {
   const scope = mockSucc();
   process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
   const res = await superkoa(t.context.app)
-    .get("/api/refresh?async=1&token=test-refresh-token");
+    .get("/api/refresh?token=test-refresh-token");
   delete process.env.CACHE_REFRESH_TOKEN;
 
   t.is(res.status, 202);

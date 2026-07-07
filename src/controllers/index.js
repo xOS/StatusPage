@@ -29,21 +29,21 @@ export const Refresh = async ctx => {
     return;
   }
 
-  if (ctx.query.async === "1" || ctx.query.async === "true") {
-    ctx.status = 202;
-    ctx.body = {
-      ok: true,
-      accepted: true,
-      days,
-      savedAt: Date.now()
-    };
-    ctx.services.uptimerobot.refreshStatusPageCache(days).catch(() => {});
+  if (ctx.query.wait === "1" || ctx.query.wait === "true") {
+    const status = await ctx.services.uptimerobot.refreshStatusPageCache(days);
+
+    ctx.body = refreshSummary(status, days);
     return;
   }
 
-  const status = await ctx.services.uptimerobot.refreshStatusPageCache(days);
-
-  ctx.body = refreshSummary(status, days);
+  scheduleRefresh(ctx, ctx.services.uptimerobot.refreshStatusPageCache(days));
+  ctx.status = 202;
+  ctx.body = {
+    ok: true,
+    accepted: true,
+    days,
+    savedAt: Date.now()
+  };
 };
 
 export const Info = async ctx => {
@@ -109,4 +109,14 @@ function refreshSummary(status, days) {
     monitors: Object.values(status.monitors || {}).reduce((sum, monitors) => sum + monitors.length, 0),
     logs: (status.logs || []).length
   };
+}
+
+function scheduleRefresh(ctx, promise) {
+  const guarded = promise.catch(() => {});
+  if (ctx.req && typeof ctx.req.waitUntil === "function") {
+    ctx.req.waitUntil(guarded);
+    return;
+  }
+
+  guarded.catch(() => {});
 }

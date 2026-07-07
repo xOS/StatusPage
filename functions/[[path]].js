@@ -43,18 +43,18 @@ export async function onRequest(context) {
       }
 
       const days = Number(url.searchParams.get("days") || DAYS);
-      if (url.searchParams.get("async") === "1" || url.searchParams.get("async") === "true") {
-        context.waitUntil(refreshStatusCache(context, env, days, `status:${days}`).catch(() => {}));
-        return json({
-          ok: true,
-          accepted: true,
-          days,
-          savedAt: Date.now()
-        }, { "cache-control": "no-store" }, 202);
+      if (url.searchParams.get("wait") === "1" || url.searchParams.get("wait") === "true") {
+        const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
+        return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
       }
 
-      const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
-      return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
+      context.waitUntil(refreshStatusCache(context, env, days, `status:${days}`).catch(() => {}));
+      return json({
+        ok: true,
+        accepted: true,
+        days,
+        savedAt: Date.now()
+      }, { "cache-control": "no-store" }, 202);
     }
 
     if (url.pathname === "/api/info") {
