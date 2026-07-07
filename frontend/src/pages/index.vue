@@ -10,7 +10,7 @@
 				{{ uptime_error?.message }}
 			</n-alert>
 			<n-alert
-				v-if="uptime_loading"
+				v-if="showLoading"
 				title="加载中..."
 				class="rounded-lg shadow"
 				type="info"
@@ -36,7 +36,7 @@
 		</div>
 		<div class="col-span-12 flex flex-col gap-4 overflow-hidden">
 			<div
-				v-show="uptime_loading"
+				v-show="showLoading"
 				class="border border-gray-200 rounded-lg bg-white px-6 shadow dark:border-gray-700 dark:bg-gray-800"
 			>
 				<n-spin class="min-h-40 w-full"> </n-spin>
@@ -55,7 +55,7 @@
 				</div>
 			</div>
 			<div
-				v-if="!uptime_loading && !uptime_error && Object.keys(monitors).length === 0"
+				v-if="showContent && !uptime_error && Object.keys(monitors).length === 0"
 				class="border border-gray-200 rounded-lg bg-white p-6 text-center text-gray-500 shadow dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
 			>
 				暂无监控数据
@@ -81,8 +81,8 @@
 				class="border border-gray-200 rounded-lg bg-white p-6 shadow dark:border-gray-700 dark:bg-gray-800 transition-all duration-300"
 				:style="logContainerStyle"
 			>
-				<n-spin v-show="uptime_loading" class="min-h-40 w-full"></n-spin>
-				<n-timeline v-if="!uptime_loading">
+				<n-spin v-show="showLoading" class="min-h-40 w-full"></n-spin>
+				<n-timeline v-if="showContent">
 					<n-timeline-item
 						v-for="(item, key) in displayedLogs"
 						:key="key"
@@ -106,7 +106,7 @@
 						</div>
 					</n-timeline-item>
 				</n-timeline>
-				<div v-if="!uptime_loading && sortedLogs.length === 0" class="text-center text-gray-500 py-8">
+				<div v-if="showContent && sortedLogs.length === 0" class="text-center text-gray-500 py-8">
 					暂无宕机记录
 				</div>
 			</div>
@@ -120,10 +120,40 @@ const {
 	error: uptime_error,
 } = uptimeRequest('', 90)
 
+const showLoading = ref(false)
+let loadingTimer: ReturnType<typeof setTimeout> | undefined
+
+watch(
+	uptime_loading,
+	(value) => {
+		if (loadingTimer) {
+			clearTimeout(loadingTimer)
+			loadingTimer = undefined
+		}
+
+		if (value && !uptime_data.value) {
+			loadingTimer = setTimeout(() => {
+				showLoading.value = true
+			}, 800)
+			return
+		}
+
+		showLoading.value = false
+	},
+	{ immediate: true },
+)
+
+onBeforeUnmount(() => {
+	if (loadingTimer) {
+		clearTimeout(loadingTimer)
+	}
+})
+
 // 控制宕机日志展开/折叠状态
 const showAllLogs = ref(false)
 
 const monitors = computed(() => uptime_data.value?.monitors || {})
+const showContent = computed(() => !uptime_loading.value || !!uptime_data.value)
 
 const allok = computed(() => {
 	let ok = true
@@ -155,7 +185,7 @@ const displayedLogs = computed(() => {
 
 // 动态计算日志容器的样式
 const logContainerStyle = computed(() => {
-  if (uptime_loading.value) {
+  if (showLoading.value) {
     return {
       minHeight: '160px'
     }

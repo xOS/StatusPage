@@ -9,8 +9,8 @@ import { join } from "path";
 const distance = 59;
 const statusPageDistance = 90;
 const statusPageCacheTTL = Number(process.env.CACHE_TTL_MS || 60 * 1000);
-const statusPageStaleTTL = Number(process.env.CACHE_STALE_TTL_MS || 10 * 60 * 1000);
-const statusPageDiskTTL = Number(process.env.CACHE_DISK_TTL_MS || 24 * 60 * 60 * 1000);
+const statusPageStaleTTL = Number(process.env.CACHE_STALE_TTL_MS || 0);
+const statusPageDiskTTL = Number(process.env.CACHE_DISK_TTL_MS || statusPageStaleTTL);
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
@@ -62,6 +62,7 @@ export default class UptimeRobotService {
     this.statusPageRefreshes = {};
     const pattern = require("config").get("uptimerobot.pattern");
     this.parser = pattern ? new Parser(pattern) : null;
+    this.getStatusPageCache(statusPageDistance);
   }
 
   async prefetchList() {
@@ -302,7 +303,7 @@ export default class UptimeRobotService {
     const diskCached = this.readStatusPageDiskCache(days);
     if (!diskCached) return null;
 
-    this.cache.put(key, diskCached, Math.max(statusPageStaleTTL, statusPageDiskTTL));
+    this.putMemoryStatusPageCache(key, diskCached);
     return diskCached;
   }
 
@@ -314,9 +315,19 @@ export default class UptimeRobotService {
       savedAt: now
     };
 
-    this.cache.put(this.statusPageCacheKey(days), entry, Math.max(statusPageStaleTTL, statusPageDiskTTL));
+    this.putMemoryStatusPageCache(this.statusPageCacheKey(days), entry);
     this.writeStatusPageDiskCache(days, entry);
     return data;
+  }
+
+  putMemoryStatusPageCache(key, entry) {
+    const ttl = Math.max(statusPageStaleTTL, statusPageDiskTTL);
+    if (ttl > 0) {
+      this.cache.put(key, entry, ttl);
+      return;
+    }
+
+    this.cache.put(key, entry);
   }
 
   warmupStatusPageCache(days = statusPageDistance) {
@@ -346,7 +357,7 @@ export default class UptimeRobotService {
 
       const entry = JSON.parse(readFileSync(file, "utf8"));
       if (!entry || !entry.data || !entry.savedAt) return null;
-      if (Date.now() - entry.savedAt > statusPageDiskTTL) return null;
+      if (statusPageDiskTTL > 0 && Date.now() - entry.savedAt > statusPageDiskTTL) return null;
 
       return {
         data: entry.data,

@@ -5,9 +5,41 @@ export const Index = async ctx => {
   });
 };
 
+const REFRESH_TOKEN_ENV_KEYS = ["CACHE_REFRESH_TOKEN", "CRON_SECRET", "REFRESH_TOKEN"];
+
 export const Status = async ctx => {
   const days = Number(ctx.query.days || 90);
+  ctx.set("Cache-Control", "public, max-age=15, s-maxage=60, stale-while-revalidate=604800");
+
+  if (isRefreshAuthorized(ctx, false)) {
+    ctx.body = await ctx.services.uptimerobot.refreshStatusPageCache(days);
+    return;
+  }
+
   ctx.body = await ctx.services.uptimerobot.statusPage(days);
+};
+
+export const Refresh = async ctx => {
+  const days = Number(ctx.query.days || 90);
+  ctx.set("Cache-Control", "no-store");
+
+  if (!isRefreshAuthorized(ctx, false)) {
+    ctx.status = 401;
+    ctx.body = { message: "Unauthorized cache refresh." };
+    return;
+  }
+
+  const [status] = await Promise.all([
+    ctx.services.uptimerobot.refreshStatusPageCache(days),
+    ctx.services.uptimerobot.prefetchList()
+  ]);
+
+  ctx.body = {
+    ok: true,
+    days,
+    savedAt: Date.now(),
+    status
+  };
 };
 
 export const Info = async ctx => {
@@ -50,4 +82,16 @@ function normalizeSiteInfo(website = {}) {
       projectUrl: PROJECT_URL
     }
   };
+}
+
+function isRefreshAuthorized(ctx, allowWithoutToken) {
+  if (ctx.get("x-vercel-cron-schedule") || ctx.get("user-agent") === "vercel-cron/1.0") {
+    return true;
+  }
+
+  const token = REFRESH_TOKEN_ENV_KEYS.map(key => process.env[key]).find(Boolean);
+  if (!token) return allowWithoutToken;
+
+  const auth = ctx.get("authorization");
+  return auth === `Bearer ${token}` || ctx.query.token === token;
 }

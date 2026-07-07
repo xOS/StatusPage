@@ -1,11 +1,12 @@
 const DAYS = 90;
 const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
-const CACHE_STALE_TTL_MS = 10 * 60 * 1000;
+const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
-let cached;
+const memoryCache = new Map();
+const refreshes = new Map();
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -17,35 +18,38 @@ export async function onRequest(context) {
       const now = Date.now();
       const cacheKey = `status:${days}`;
 
-      if (!cached || cached.key !== cacheKey || cached.staleAt <= now) {
-        cached = {
-          key: cacheKey,
-          expiresAt: now + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
-          staleAt: now + Number(env.CACHE_STALE_TTL_MS || CACHE_STALE_TTL_MS),
-          data: await fetchStatus(env, days)
-        };
-      } else if (cached.expiresAt <= now && !cached.refreshing) {
-        cached.refreshing = true;
-        const refresh = fetchStatus(env, days)
-          .then(data => {
-            const refreshedAt = Date.now();
-            cached = {
-              key: cacheKey,
-              expiresAt: refreshedAt + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
-              staleAt: refreshedAt + Number(env.CACHE_STALE_TTL_MS || CACHE_STALE_TTL_MS),
-              data
-            };
-          })
-          .catch(() => {
-            cached.refreshing = false;
-          });
-
-        context.waitUntil(refresh);
+      if (isRefreshAuthorized(request, env, false)) {
+        const refreshed = await refreshStatusCache(context, env, days, cacheKey);
+        return json(refreshed.data, statusCacheHeaders(refreshed, now, true));
       }
 
-      return json(cached.data, {
-        "cache-control": "no-store"
-      });
+      const cached = await readStatusCache(context, cacheKey);
+
+      if (cached) {
+        if (cached.expiresAt <= now) {
+          context.waitUntil(refreshStatusCache(context, env, days, cacheKey).catch(() => {}));
+        }
+
+        return json(cached.data, statusCacheHeaders(cached, now));
+      }
+
+      const refreshed = await refreshStatusCache(context, env, days, cacheKey);
+      return json(refreshed.data, statusCacheHeaders(refreshed, now, true));
+    }
+
+    if (url.pathname === "/api/refresh") {
+      if (!isRefreshAuthorized(request, env, false)) {
+        return json({ message: "Unauthorized cache refresh." }, { "cache-control": "no-store" }, 401);
+      }
+
+      const days = Number(url.searchParams.get("days") || DAYS);
+      const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
+      return json({
+        ok: true,
+        days,
+        savedAt: Date.now(),
+        status: refreshed.data
+      }, { "cache-control": "no-store" });
     }
 
     if (url.pathname === "/api/info") {
@@ -56,6 +60,134 @@ export async function onRequest(context) {
   } catch (err) {
     return json({ message: err.message }, {}, 500);
   }
+}
+
+function statusCacheHeaders(entry, now, missed = false) {
+  return {
+    "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=604800",
+    "x-status-cache": missed ? "MISS" : entry.expiresAt > now ? "HIT" : "STALE",
+    "x-status-cache-saved-at": String(entry.savedAt)
+  };
+}
+
+async function readStatusCache(context, cacheKey) {
+  const cached = memoryCache.get(cacheKey);
+  if (cached) return cached;
+
+  const kvCached = await readKvStatusCache(context.env, cacheKey);
+  if (kvCached) {
+    memoryCache.set(cacheKey, kvCached);
+    return kvCached;
+  }
+
+  const cache = await edgeCache();
+  if (!cache) return null;
+
+  const response = await cache.match(statusCacheRequest(context, cacheKey));
+  if (!response) return null;
+
+  try {
+    const entry = await response.json();
+    if (!entry || !entry.data || !entry.savedAt) return null;
+    memoryCache.set(cacheKey, entry);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshStatusCache(context, env, days, cacheKey) {
+  if (refreshes.has(cacheKey)) return refreshes.get(cacheKey);
+
+  const refresh = fetchStatus(env, days).then(async data => {
+    const refreshedAt = Date.now();
+    const entry = {
+      key: cacheKey,
+      data,
+      expiresAt: refreshedAt + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
+      savedAt: refreshedAt
+    };
+
+    memoryCache.set(cacheKey, entry);
+    await writeStatusCache(context, env, cacheKey, entry);
+    return entry;
+  }).finally(() => {
+    refreshes.delete(cacheKey);
+  });
+
+  refreshes.set(cacheKey, refresh);
+  return refresh;
+}
+
+async function writeStatusCache(context, env, cacheKey, entry) {
+  await writeKvStatusCache(env, cacheKey, entry);
+
+  const cache = await edgeCache();
+  if (!cache) return;
+
+  const retentionMs = Number(env.CACHE_STALE_TTL_MS || env.CACHE_DISK_TTL_MS || CACHE_STALE_TTL_MS);
+  const maxAge = retentionMs > 0 ? Math.ceil(retentionMs / 1000) : 365 * 24 * 60 * 60;
+  const response = new Response(JSON.stringify(entry), {
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": `public, max-age=${maxAge}`
+    }
+  });
+
+  context.waitUntil(cache.put(statusCacheRequest(context, cacheKey), response));
+}
+
+function statusCacheRequest(context, cacheKey) {
+  const url = new URL(context.request.url);
+  url.pathname = `/__status-cache/${cacheKey}`;
+  url.search = "";
+  return new Request(url.toString(), { method: "GET" });
+}
+
+async function edgeCache() {
+  if (typeof caches === "undefined" || !caches.default) return null;
+  return caches.default;
+}
+
+async function readKvStatusCache(env, cacheKey) {
+  if (!env.STATUS_CACHE || typeof env.STATUS_CACHE.get !== "function") return null;
+
+  try {
+    const value = await env.STATUS_CACHE.get(cacheKey);
+    if (!value) return null;
+
+    const entry = JSON.parse(value);
+    if (!entry || !entry.data || !entry.savedAt) return null;
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+async function writeKvStatusCache(env, cacheKey, entry) {
+  if (!env.STATUS_CACHE || typeof env.STATUS_CACHE.put !== "function") return;
+
+  const retentionMs = Number(env.CACHE_STALE_TTL_MS || env.CACHE_DISK_TTL_MS || CACHE_STALE_TTL_MS);
+  const expirationTtl = retentionMs > 0 ? Math.ceil(retentionMs / 1000) : undefined;
+  const options = expirationTtl ? { expirationTtl } : undefined;
+
+  try {
+    await env.STATUS_CACHE.put(cacheKey, JSON.stringify(entry), options);
+  } catch {
+    // Keep the edge cache and in-memory cache usable even when KV is not writable.
+  }
+}
+
+function isRefreshAuthorized(request, env, allowWithoutToken) {
+  if (request.headers.get("x-vercel-cron-schedule") || request.headers.get("user-agent") === "vercel-cron/1.0") {
+    return true;
+  }
+
+  const token = env.CACHE_REFRESH_TOKEN || env.CRON_SECRET || env.REFRESH_TOKEN;
+  if (!token) return allowWithoutToken;
+
+  const url = new URL(request.url);
+  return request.headers.get("authorization") === `Bearer ${token}` || url.searchParams.get("token") === token;
 }
 
 function siteInfoFromEnv(env) {

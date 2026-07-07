@@ -4,18 +4,19 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.js": {
-      "includeFiles": [
-        "build/views/**",
-        "build/public/**",
-        "frontend/dist/**",
-        "config/**"
-      ]
+      "includeFiles": "{build/views/**,build/public/**,frontend/dist/**,config/**}"
     }
   },
   "rewrites": [
     {
       "source": "/(.*)",
       "destination": "/api/index.js"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/status",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

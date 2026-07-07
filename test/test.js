@@ -32,6 +32,29 @@ test.serial("GET /api/status", async t => {
   scope.persist(false);
 });
 
+test.serial("GET /api/status returns stale snapshot before background refresh", async t => {
+  const ok = mockSucc();
+  await t.context.app.context.services.uptimerobot.refreshStatusPageCache(88);
+  ok.persist(false);
+
+  const key = t.context.app.context.services.uptimerobot.statusPageCacheKey(88);
+  const cached = t.context.app.context.services.uptimerobot.cache.get(key);
+  cached.expiresAt = Date.now() - 1;
+  t.context.app.context.services.uptimerobot.cache.put(key, cached);
+
+  const fail = mockFail();
+  const res = await superkoa(t.context.app).get("/api/status?days=88");
+  t.is(res.status, 200);
+  t.truthy(res.body.monitors.Web);
+  t.is(res.body.monitors.Web.length, 2);
+  fail.persist(false);
+});
+
+test.serial("GET /api/refresh requires token", async t => {
+  const res = await superkoa(t.context.app).get("/api/refresh");
+  t.is(res.status, 401);
+});
+
 test.serial("GET /api/info", async t => {
   const res = await superkoa(t.context.app).get("/api/info");
   t.is(res.status, 200);

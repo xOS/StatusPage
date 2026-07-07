@@ -66,11 +66,12 @@ npx pnpm@8.15.8 run dev
 | `WEBSITE_FOOTER_OWNER` | 否 | 页脚版权归属者；不设置时回退到 `WEBSITE_COPYRIGHT` |
 | `WEBSITE_FOOTER_OWNER_URL` | 否 | 页脚版权归属者链接，默认 `https://www.nange.cn` |
 | `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段，也会作为页脚版权归属者兜底 |
-| `CACHE_TTL_MS` | 否 | `/api/status` 请求缓存时间，默认 `60000` |
-| `CACHE_STALE_TTL_MS` | 否 | 过期缓存可继续返回的时间，默认 `600000` |
+| `CACHE_TTL_MS` | 否 | 快照新鲜时间，超过后后台刷新，默认 `60000` |
+| `CACHE_STALE_TTL_MS` | 否 | 快照可继续返回的时间，默认 `0` 表示不主动过期 |
 | `CACHE_DISK` | 否 | 是否启用磁盘缓存，设为 `false` 可关闭 |
-| `CACHE_DISK_TTL_MS` | 否 | 磁盘缓存有效期，默认 `86400000` |
+| `CACHE_DISK_TTL_MS` | 否 | 磁盘缓存有效期，默认跟随 `CACHE_STALE_TTL_MS` |
 | `CACHE_DIR` | 否 | 磁盘缓存目录，默认 `.cache` |
+| `CACHE_REFRESH_TOKEN` | 否 | 手动预热 `/api/refresh` 的访问令牌；也兼容 `CRON_SECRET` / `REFRESH_TOKEN` |
 | `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
 | `PORT` | 否 | Koa 监听端口 |
 | `LOG_LEVEL` | 否 | 日志级别 |
@@ -86,7 +87,7 @@ config/default.yml < config/${NODE_ENV}.yml < 环境变量
 
 ### `GET /api/status`
 
-新版前端使用的数据接口。默认返回最近 90 天数据，可通过查询参数覆盖：
+新版前端使用的数据接口。它优先返回后端已经生成好的状态快照；如果快照超过 `CACHE_TTL_MS`，接口仍会立即返回旧快照，并在后台刷新。默认返回最近 90 天数据，可通过查询参数覆盖：
 
 ```http
 GET /api/status?days=90
@@ -97,6 +98,14 @@ GET /api/status?days=90
 * `monitors`：按分组整理后的节点状态。
 * `logs`：宕机日志，按时间倒序。
 * 每个节点的 `daily`、`response_times`、`total`、`average` 和 `status`。
+
+### `GET /api/refresh`
+
+预热状态快照接口，用于外部 cron 或平台定时任务提前刷新后端缓存。手动或外部定时调用需要配置 `CACHE_REFRESH_TOKEN`，并通过 `Authorization: Bearer <token>` 或 `?token=<token>` 调用；Vercel Cron 会通过平台 cron 请求头自动放行。
+
+```http
+GET /api/refresh?days=90&token=your-token
+```
 
 ### `GET /api/info`
 
@@ -184,6 +193,8 @@ WEBSITE_FOOTER_OWNER=楠格
 
 Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/api/status`。函数环境没有常驻 cron，数据会在函数实例内按请求缓存，默认 60 秒。
 
+项目已在 `vercel.json` 配置 Vercel Cron，每 5 分钟请求一次 `/api/status` 来预热状态快照。Vercel Cron 请求会带 `vercel-cron/1.0` User-Agent 和 `x-vercel-cron-schedule` 头，后端会把它识别为刷新请求。
+
 ## Cloudflare Pages 部署
 
 项目已内置 Cloudflare Pages 配置：
@@ -208,7 +219,15 @@ WEBSITE_FOOTER_OWNER=楠格
 
 Cloudflare Pages 会托管 `frontend/dist`，并通过 Pages Function 动态提供 `/api/status`。项目不再使用从旧前端带来的 Worker/KV/backup 接口。
 
-为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 命中已过期但仍可用的缓存时会先返回旧数据，并在后台刷新。Koa 常驻部署还会把新版状态数据写入磁盘缓存，进程重启后可先返回上次缓存并后台刷新。首次全新部署没有历史缓存时仍需要等待 UptimeRobot 返回数据；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` 或缩短前端请求的 `days` 参数。
+为了让 Cloudflare Pages 在换浏览器、换边缘实例时也能秒回，建议创建 Workers KV namespace，并在 Pages 项目中绑定变量名 `STATUS_CACHE`。`functions/[[path]].js` 会优先读取 KV 中最后一次成功生成的快照；如果没有 KV，会退回到当前边缘实例内存和 Cache API。
+
+Cloudflare Pages 没有本项目 Koa 进程那样的常驻 cron。需要提前刷新时，可用 Cloudflare Worker Cron、UptimeRobot、GitHub Actions 或其他外部定时器请求：
+
+```http
+GET https://你的域名/api/refresh?token=your-token
+```
+
+为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 只在完全没有任何历史快照时等待官方 API。只要后端曾成功拿到过一次数据，之后刷新页面、换浏览器或缓存超过 `CACHE_TTL_MS` 都会先返回旧快照，并后台刷新。Koa 常驻部署还会把新版状态数据写入磁盘缓存，进程重启后可先返回上次缓存。首次全新部署没有历史缓存时仍需要等待 UptimeRobot 返回数据；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` 或缩短前端请求的 `days` 参数。
 
 ## Docker 部署
 
