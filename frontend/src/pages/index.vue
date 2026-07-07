@@ -42,7 +42,7 @@
 				<n-spin class="min-h-40 w-full"> </n-spin>
 			</div>
 
-			<div v-for="(topItem, i) in uptime_data.monitors" :key="i" class="w-full">
+			<div v-for="(topItem, i) in monitors" :key="i" class="w-full">
 				<div>{{ i }}</div>
 				<div
 					class="mt-2 border border-gray-200 rounded-lg bg-white px-6 shadow dark:border-gray-700 dark:bg-gray-800"
@@ -53,6 +53,12 @@
 						</ul>
 					</div>
 				</div>
+			</div>
+			<div
+				v-if="!uptime_loading && !uptime_error && Object.keys(monitors).length === 0"
+				class="border border-gray-200 rounded-lg bg-white p-6 text-center text-gray-500 shadow dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
+			>
+				暂无监控数据
 			</div>
 			<div class="mt-2 flex items-center justify-between">
 				<div>
@@ -117,11 +123,12 @@ const {
 // 控制宕机日志展开/折叠状态
 const showAllLogs = ref(false)
 
+const monitors = computed(() => uptime_data.value?.monitors || {})
+
 const allok = computed(() => {
 	let ok = true
-	for (const key in uptime_data.value?.monitors) {
-		// eslint-disable-next-line no-unsafe-optional-chaining
-		for (const item of uptime_data.value?.monitors[key]) {
+	for (const key in monitors.value) {
+		for (const item of monitors.value[key]) {
 			if (item.status !== 'ok') {
 				ok = false
 			}

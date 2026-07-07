@@ -60,6 +60,8 @@ npx pnpm@8.15.8 run dev
 | `WEBSITE_TITLE` | 否 | 页面标题，默认 `服务状态` |
 | `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段 |
 | `CACHE_TTL_MS` | 否 | `/api/status` 请求缓存时间，默认 `60000` |
+| `CACHE_STALE_TTL_MS` | 否 | 过期缓存可继续返回的时间，默认 `600000` |
+| `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
 | `PORT` | 否 | Koa 监听端口 |
 | `LOG_LEVEL` | 否 | 日志级别 |
 | `CRON_TIME` | 否 | Koa cron 刷新周期 |
@@ -161,6 +163,8 @@ WEBSITE_TITLE=服务状态
 `YARN_VERSION=1.22.22` 用于让 Cloudflare Pages 使用 Yarn Classic 安装根项目依赖。Cloudflare Pages v3 构建镜像默认使用 Yarn 4，直接安装本项目的 Yarn 1 锁文件会尝试迁移锁文件并导致构建失败。
 
 Cloudflare Pages 会托管 `frontend/dist`，并通过 Pages Function 动态提供 `/api/status`。项目不再使用从旧前端带来的 Worker/KV/backup 接口。
+
+为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 命中已过期但仍可用的缓存时会先返回旧数据，并在后台刷新。首次冷启动仍需要等待 UptimeRobot 返回数据；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` 或缩短前端请求的 `days` 参数。
 
 ## Docker 部署
 

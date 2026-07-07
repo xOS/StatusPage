@@ -1,6 +1,8 @@
 const DAYS = 90;
 const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
+const CACHE_STALE_TTL_MS = 10 * 60 * 1000;
+const RESPONSE_TIMES_LIMIT = 48;
 
 let cached;
 
@@ -14,12 +16,30 @@ export async function onRequest(context) {
       const now = Date.now();
       const cacheKey = `status:${days}`;
 
-      if (!cached || cached.key !== cacheKey || cached.expiresAt <= now) {
+      if (!cached || cached.key !== cacheKey || cached.staleAt <= now) {
         cached = {
           key: cacheKey,
           expiresAt: now + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
+          staleAt: now + Number(env.CACHE_STALE_TTL_MS || CACHE_STALE_TTL_MS),
           data: await fetchStatus(env, days)
         };
+      } else if (cached.expiresAt <= now && !cached.refreshing) {
+        cached.refreshing = true;
+        const refresh = fetchStatus(env, days)
+          .then(data => {
+            const refreshedAt = Date.now();
+            cached = {
+              key: cacheKey,
+              expiresAt: refreshedAt + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
+              staleAt: refreshedAt + Number(env.CACHE_STALE_TTL_MS || CACHE_STALE_TTL_MS),
+              data
+            };
+          })
+          .catch(() => {
+            cached.refreshing = false;
+          });
+
+        context.waitUntil(refresh);
       }
 
       return json(cached.data, {
@@ -57,6 +77,7 @@ async function fetchStatus(env, days) {
     logs: "1",
     log_types: "1-2",
     response_times: "1",
+    response_times_limit: String(env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || RESPONSE_TIMES_LIMIT),
     logs_start_date: String(start),
     logs_end_date: String(end),
     custom_uptime_ranges: ranges.join("-"),

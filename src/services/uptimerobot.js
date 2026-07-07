@@ -7,6 +7,8 @@ import { format, addDays, addSeconds, startOfDay, fromUnixTime } from "date-fns"
 const distance = 59;
 const statusPageDistance = 90;
 const statusPageCacheTTL = Number(process.env.CACHE_TTL_MS || 60 * 1000);
+const statusPageStaleTTL = Number(process.env.CACHE_STALE_TTL_MS || 10 * 60 * 1000);
+const responseTimesLimit = Number(process.env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || 48);
 
 function lastDays(distance) {
   const now = startOfDay(new Date());
@@ -50,6 +52,7 @@ export default class UptimeRobotService {
   constructor(key) {
     this.api = new UptimeRobot(key);
     this.cache = new Cache();
+    this.statusPageRefreshes = {};
     const pattern = require("config").get("uptimerobot.pattern");
     this.parser = pattern ? new Parser(pattern) : null;
   }
@@ -164,6 +167,7 @@ export default class UptimeRobotService {
       logs: 1,
       log_types: "1-2",
       response_times: 1,
+      response_times_limit: responseTimesLimit,
       logs_start_date: start,
       logs_end_date: end,
       custom_uptime_ranges: ranges.join("-"),
@@ -243,7 +247,7 @@ export default class UptimeRobotService {
 
     data.logs.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
 
-    return this.cache.put(`status-page:${days}`, data, statusPageCacheTTL);
+    return this.putStatusPageCache(days, data);
   }
 
   async list() {
@@ -257,13 +261,50 @@ export default class UptimeRobotService {
   }
 
   async statusPage(days = statusPageDistance) {
-    let data = this.cache.get(`status-page:${days}`);
-    if (!data) {
-      data = await this.prefetchStatusPage(days);
-    } else {
-      logger.debug("Hit Status Page Cache");
+    const key = this.statusPageCacheKey(days);
+    const cached = this.cache.get(key);
+
+    if (!cached) {
+      return await this.prefetchStatusPage(days);
     }
+
+    if (cached.expiresAt > Date.now()) {
+      logger.debug("Hit Status Page Cache");
+      return cached.data;
+    }
+
+    logger.debug("Hit Stale Status Page Cache");
+    this.refreshStatusPageCache(days);
+    return cached.data;
+  }
+
+  statusPageCacheKey(days) {
+    return `status-page:${days}`;
+  }
+
+  putStatusPageCache(days, data) {
+    const entry = {
+      data,
+      expiresAt: Date.now() + statusPageCacheTTL
+    };
+
+    this.cache.put(this.statusPageCacheKey(days), entry, statusPageStaleTTL);
     return data;
+  }
+
+  refreshStatusPageCache(days) {
+    const key = this.statusPageCacheKey(days);
+    if (this.statusPageRefreshes[key]) return this.statusPageRefreshes[key];
+
+    this.statusPageRefreshes[key] = this.prefetchStatusPage(days)
+      .catch(err => {
+        logger.error(err);
+      })
+      .finally(() => {
+        delete this.statusPageRefreshes[key];
+      });
+
+    return this.statusPageRefreshes[key];
   }
 
   parseMonitorName(name) {
