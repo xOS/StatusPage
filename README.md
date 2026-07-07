@@ -193,7 +193,7 @@ WEBSITE_FOOTER_OWNER=楠格
 
 Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/api/status`。函数环境没有常驻 cron，数据会在函数实例内按请求缓存，默认 60 秒。
 
-项目已在 `vercel.json` 配置 Vercel Cron，每 5 分钟请求一次 `/api/status` 来预热状态快照。Vercel Cron 请求会带 `vercel-cron/1.0` User-Agent 和 `x-vercel-cron-schedule` 头，后端会把它识别为刷新请求。
+项目已在 `vercel.json` 配置 Vercel Cron，每天请求一次 `/api/status` 来预热状态快照。Vercel Hobby 计划只允许 daily cron；如果需要 5 分钟级别刷新，可用 UptimeRobot、GitHub Actions 或其他外部定时器请求 `/api/refresh`。
 
 ## Cloudflare Pages 部署
 
