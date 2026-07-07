@@ -5,7 +5,7 @@ import { mockSucc, mockFail } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
 
 test.beforeEach(({ context }) => {
-  context.app = createAPP();
+  context.app = createAPP({ cron: false });
 });
 
 test.serial("GET /", async t => {
@@ -16,7 +16,7 @@ test.serial("GET /", async t => {
   // test UI
   const $ = cheerio.load(res.text);
   t.true($(".icon.icon-status-sum").hasClass("down"));
-  t.is($(".summary-detail").text(), "2 systems are down.");
+  t.is($(".summary-detail").text(), "有 2 个服务异常！");
   t.is($(".monitor").length, 4);
   scope.persist(false);
 });
