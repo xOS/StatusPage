@@ -9,7 +9,7 @@ import staticCache from "koa-static-cache";
 import { mountConfig } from "./config";
 import cron from "./cron";
 
-export function createAPP() {
+export function createAPP(options = {}) {
   const app = new Koa();
 
   // mount config to koa ctx
@@ -25,7 +25,9 @@ export function createAPP() {
   };
 
   // start cron
-  cron(app.context);
+  if (options.cron !== false) {
+    cron(app.context);
+  }
 
   // views
   app.use(

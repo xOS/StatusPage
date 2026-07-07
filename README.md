@@ -33,7 +33,7 @@ node build/bootstrap
 
 ## Requirements
 
-* Node.js >= 10
+* Node.js >= 16
 * Uptime Robot API key
 * Docker and docker-compose (optional)
 
@@ -43,6 +43,48 @@ node build/bootstrap
 wget https://raw.githubusercontent.com/XOS/StatusPage/master/docker-compose.yml
 docker-compose up -d
 ```
+
+## Vercel 部署
+
+项目已内置 [Vercel](https://vercel.com/) 配置：
+
+* 配置文件：`vercel.json`
+* 构建命令：`npm run build`
+* 运行入口：`api/index.js`
+
+在 Vercel 项目环境变量中至少配置：
+
+```bash
+UPTIME_ROBOT_API=你的 UptimeRobot API Key
+UPTIME_ROBOT_NAME_PATTERN=%group/%index/%name
+WEBSITE_TITLE=服务状态
+WEBSITE_COPYRIGHT=楠格
+```
+
+Vercel 会通过 Serverless Function 动态渲染首页。函数环境不会启动本项目的 cron 任务；数据会在函数实例内按请求缓存。
+
+## Cloudflare Pages 部署
+
+项目已内置 [Cloudflare Pages](https://pages.cloudflare.com/) 动态函数配置：
+
+* 配置文件：`wrangler.toml`
+* 构建命令：`npm run build:cloudflare`
+* 输出目录：`build/public`
+* 动态入口：`functions/[[path]].js`
+
+在 Cloudflare Pages 项目环境变量中至少配置：
+
+```bash
+YARN_VERSION=1.22.22
+UPTIME_ROBOT_API=你的 UptimeRobot API Key
+UPTIME_ROBOT_NAME_PATTERN=%group/%index/%name
+WEBSITE_TITLE=服务状态
+WEBSITE_COPYRIGHT=楠格
+```
+
+`YARN_VERSION=1.22.22` 用于让 Cloudflare Pages 使用 Yarn Classic 安装依赖。Cloudflare Pages v3 构建镜像默认使用 Yarn 4，直接安装本项目的 Yarn 1 锁文件会触发锁文件迁移并导致构建失败。
+
+Cloudflare Pages 会通过 Pages Function 动态请求 UptimeRobot 并渲染首页。函数内默认缓存 60 秒，可通过 `CACHE_TTL_MS` 调整；页脚链接可用 `WEBSITE_LINKS` 配置为 JSON 数组。
 
 ## 节点命名格式
 如：组名/索引序号/真实节点名（就是要显示的节点名），索引序列号建议用三位数字表示，前前一位数字表示组的序号，最后两位数字表示组内节点的序号。如：
@@ -103,4 +145,3 @@ To put index into your parser, you will able to sort your group in page manually
 > ```
 > GroupA//MonitorB
 > ```
-

@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "build/public",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": [
+        "build/views/**",
+        "build/public/**",
+        "config/**"
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.js"
+    }
+  ]
+}

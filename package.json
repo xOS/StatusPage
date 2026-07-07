@@ -3,6 +3,10 @@
     "description": "一款基于 UptimeRobot 中文状态监测页",
     "version": "0.2.3",
     "main": "build/bootstrap/app.js",
+    "packageManager": "yarn@1.22.22",
+    "engines": {
+        "node": ">=16"
+    },
     "repository": "https://github.com/xOS/StatusPage.git",
     "author": "佩佩 <admin@nange.cn>",
     "license": "GPL-3.0",
@@ -10,7 +14,8 @@
         "start": "node build/bootstrap",
         "dev": "gulp dev",
         "build:server": "babel src -d build",
-        "build": "npm run build:server && gulp",
+        "build": "npm run clean && npm run build:server && gulp",
+        "build:cloudflare": "npm run build",
         "clean": "rimraf build",
         "precommit": "npm run test",
         "test": "NODE_ENV=test nyc ava",
@@ -38,7 +43,7 @@
         "url": "https://github.com/xOS/StatusPage/issues"
     },
     "dependencies": {
-        "config": "^3.3.7",
+        "config": "^3.3.12",
         "cron": "^1.8.2",
         "date-fns": "^2.28.0",
         "dotenv": "^10.0.0",
@@ -116,9 +121,6 @@
         "files": [
             "test/test.js",
             "src/**/__tests__/**/*.js"
-        ],
-        "sources": [
-            "src/**/*.js"
         ],
         "concurrency": 5,
         "failFast": true,
