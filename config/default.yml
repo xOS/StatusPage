@@ -6,7 +6,7 @@ app:
 
 uptimerobot:
   api_key:
-  pattern: "%group/%index/%name"
+  pattern:
   statuses: "2-9"
 
 website:

@@ -9,7 +9,6 @@ services:
       - LOG_LEVEL=info
       - CRON_TIME=*/1 * * * *
       - UPTIME_ROBOT_API=
-      - UPTIME_ROBOT_NAME_PATTERN=%group/%name
       - WEBSITE_TITLE=
       - WEBSITE_COPYRIGHT=
     # To use config file for more flexible configure,

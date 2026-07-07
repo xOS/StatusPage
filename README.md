@@ -1,147 +1,181 @@
 # UptimeRobot 状态监测页
 
-> 一款基于 [UptimeRobot](https://uptimerobot.com/) 中文状态监测页
+基于 UptimeRobot 的中文状态页。项目已合并 `/Users/Me/GitHub/status` 的 Vue UI，前端展示以新版 UI 为主，后端继续使用当前项目的 Koa 服务负责动态拉取、整理和缓存监控数据。
 
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/xos/StatusPage/push.yml?logo=github&style=flat-square)
-[![GitHub](https://img.shields.io/github/license/xOS/StatusPage?style=flat-square)](https://github.com/XOS/StatusPage/blob/master/LICENSE)
+## 当前特性
 
-## 修改说明
-* 前端改为中文显示；
-* 改变页面显示宽度；
-* 修改显示数据为最近 60 天（原版 45 天）；
-* 增加显示当前日期数据（原版只显示到前一天）；
-* Docker 环境时修改时区为东八区；
-* 其它布局微调
+* Vue + Vite 前端，展示状态分组、响应时间图、90 天可用率和宕机日志。
+* 新版 UI 已移除侧栏和个人资料卡，并新增页脚。
+* UptimeRobot API key 只保存在后端或平台环境变量中，不暴露给浏览器。
+* Koa 常驻部署会通过 cron 预取刷新缓存。
+* Vercel 和 Cloudflare Pages 通过函数动态提供 `/api/status`，不是纯静态页面。
+* 兼容旧 Pug 页面和 `/api/info`，但新版前端默认只调用 `/api/status`。
 
-## 效果展示
+## 项目结构
 
-![](https://i.qste.com/views/2022/05/25/e3c6f3.png)
-
-## 常规环境下部署使用
-
-```bash
-git clone https://github.com/XOS/StatusPage.git && cd StatusPage
-yarn install && yarn cache clean
-yarn build
+```text
+.
+├── api/index.js              # Vercel Serverless 入口
+├── config/                   # Koa 配置和环境变量映射
+├── functions/[[path]].js     # Cloudflare Pages Function
+├── frontend/                 # Vue/Vite 前端
+├── src/                      # Koa 后端、UptimeRobot 服务、旧 Pug 页面
+├── vercel.json               # Vercel 部署配置
+└── wrangler.toml             # Cloudflare Pages 部署配置
 ```
 
-修改 config/default.yml，然后
+## 环境要求
+
+* Node.js >= 20.13.1 推荐。旧后端可运行在 Node.js >= 16，但前端依赖要求较新的 Node。
+* Yarn Classic 1.22.x 用于根项目依赖。
+* pnpm 8.15.8 用于前端依赖，构建脚本会通过 `npx pnpm@8.15.8` 自动调用。
+* UptimeRobot Read-Only API key。
+
+## 本地构建运行
 
 ```bash
+yarn install
+npm run build
 node build/bootstrap
 ```
 
-## Requirements
+默认监听端口来自 `config/default.yml` 的 `app.port`，默认是 `3000`。构建后 Koa 会优先托管 `frontend/dist`，如果前端产物不存在，则回退到旧 Pug 页面。
 
-* Node.js >= 16
-* Uptime Robot API key
-* Docker and docker-compose (optional)
+只开发前端时可单独运行：
 
-## Docker 环境下部署使用
+```bash
+cd frontend
+npx pnpm@8.15.8 install --frozen-lockfile
+npx pnpm@8.15.8 run dev
+```
+
+前端开发环境的 API 地址来自 `frontend/.env.development`，默认请求 `http://localhost:3000`，因此需要同时启动后端。
+
+## 环境变量
+
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `UPTIME_ROBOT_API` | 是 | UptimeRobot API key |
+| `UPTIME_ROBOT_NAME_PATTERN` | 否 | 旧命名格式兼容解析规则；不设置时默认使用新版 UI 的 `${类别}` / `${分组}` |
+| `WEBSITE_TITLE` | 否 | 页面标题，默认 `服务状态` |
+| `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段 |
+| `CACHE_TTL_MS` | 否 | `/api/status` 请求缓存时间，默认 `60000` |
+| `PORT` | 否 | Koa 监听端口 |
+| `LOG_LEVEL` | 否 | 日志级别 |
+| `CRON_TIME` | 否 | Koa cron 刷新周期 |
+
+配置加载顺序为：
+
+```text
+config/default.yml < config/${NODE_ENV}.yml < 环境变量
+```
+
+## API
+
+### `GET /api/status`
+
+新版前端使用的数据接口。默认返回最近 90 天数据，可通过查询参数覆盖：
+
+```http
+GET /api/status?days=90
+```
+
+返回内容包含：
+
+* `monitors`：按分组整理后的节点状态。
+* `logs`：宕机日志，按时间倒序。
+* 每个节点的 `daily`、`response_times`、`total`、`average` 和 `status`。
+
+### `GET /api/info`
+
+兼容旧前端的信息接口。新版 UI 不再需要侧栏或个人资料卡，因此默认不调用该接口。
+
+## 节点命名
+
+默认推荐直接在 UptimeRobot 监控名称中使用新版 UI 选项：
+
+```text
+监控站${国家:us}${标签:info|Cloudflare}${类别:应用}
+```
+
+常用选项：
+
+* `${类别:应用}` 或 `${分组:应用}`：指定前端展示分组。
+* `${国家:us}`：显示国家旗帜，值使用 flag-icons 的国家代码。
+* `${标签:info|Cloudflare,success|正常}`：显示标签，格式是 `类型|文本`，多个标签用英文逗号分隔。
+
+如果不设置 `${类别}` 或 `${分组}`，节点会进入 `未分类` 分组。
+
+需要兼容旧项目命名时，再设置 `UPTIME_ROBOT_NAME_PATTERN`，例如：
+
+```text
+%group/%index/%name
+```
+
+对应节点名称：
+
+```text
+境内节点/000/北京
+境内节点/001/上海
+境外节点/100/洛杉矶
+境外节点/101/香港
+```
+
+当同时存在 `${类别}` / `${分组}` 和旧命名解析结果时，新版 UI 优先使用 `${类别}` / `${分组}`。
+
+## Vercel 部署
+
+项目已内置 Vercel 配置：
+
+* 配置文件：`vercel.json`
+* 构建命令：`npm run build`
+* 输出目录：`frontend/dist`
+* 函数入口：`api/index.js`
+
+至少配置：
+
+```bash
+UPTIME_ROBOT_API=你的 UptimeRobot API Key
+WEBSITE_TITLE=服务状态
+```
+
+Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/api/status`。函数环境没有常驻 cron，数据会在函数实例内按请求缓存，默认 60 秒。
+
+## Cloudflare Pages 部署
+
+项目已内置 Cloudflare Pages 配置：
+
+* 配置文件：`wrangler.toml`
+* 构建命令：`npm run build:cloudflare`
+* 输出目录：`frontend/dist`
+* 动态入口：`functions/[[path]].js`
+
+至少配置：
+
+```bash
+YARN_VERSION=1.22.22
+UPTIME_ROBOT_API=你的 UptimeRobot API Key
+WEBSITE_TITLE=服务状态
+```
+
+`YARN_VERSION=1.22.22` 用于让 Cloudflare Pages 使用 Yarn Classic 安装根项目依赖。Cloudflare Pages v3 构建镜像默认使用 Yarn 4，直接安装本项目的 Yarn 1 锁文件会尝试迁移锁文件并导致构建失败。
+
+Cloudflare Pages 会托管 `frontend/dist`，并通过 Pages Function 动态提供 `/api/status`。项目不再使用从旧前端带来的 Worker/KV/backup 接口。
+
+## Docker 部署
 
 ```bash
 wget https://raw.githubusercontent.com/XOS/StatusPage/master/docker-compose.yml
 docker-compose up -d
 ```
 
-## Vercel 部署
+需要自定义配置时，将 `config/` 挂载到容器中，并修改 `config/default.yml` 或通过环境变量覆盖。
 
-项目已内置 [Vercel](https://vercel.com/) 配置：
-
-* 配置文件：`vercel.json`
-* 构建命令：`npm run build`
-* 运行入口：`api/index.js`
-
-在 Vercel 项目环境变量中至少配置：
+## 常用命令
 
 ```bash
-UPTIME_ROBOT_API=你的 UptimeRobot API Key
-UPTIME_ROBOT_NAME_PATTERN=%group/%index/%name
-WEBSITE_TITLE=服务状态
-WEBSITE_COPYRIGHT=楠格
+npm test                 # 后端测试
+npm run build:frontend   # 仅构建 Vue 前端
+npm run build            # 构建前端、后端和旧静态资源
+npm run clean            # 清理 build/
 ```
-
-Vercel 会通过 Serverless Function 动态渲染首页。函数环境不会启动本项目的 cron 任务；数据会在函数实例内按请求缓存。
-
-## Cloudflare Pages 部署
-
-项目已内置 [Cloudflare Pages](https://pages.cloudflare.com/) 动态函数配置：
-
-* 配置文件：`wrangler.toml`
-* 构建命令：`npm run build:cloudflare`
-* 输出目录：`build/public`
-* 动态入口：`functions/[[path]].js`
-
-在 Cloudflare Pages 项目环境变量中至少配置：
-
-```bash
-YARN_VERSION=1.22.22
-UPTIME_ROBOT_API=你的 UptimeRobot API Key
-UPTIME_ROBOT_NAME_PATTERN=%group/%index/%name
-WEBSITE_TITLE=服务状态
-WEBSITE_COPYRIGHT=楠格
-```
-
-`YARN_VERSION=1.22.22` 用于让 Cloudflare Pages 使用 Yarn Classic 安装依赖。Cloudflare Pages v3 构建镜像默认使用 Yarn 4，直接安装本项目的 Yarn 1 锁文件会触发锁文件迁移并导致构建失败。
-
-Cloudflare Pages 会通过 Pages Function 动态请求 UptimeRobot 并渲染首页。函数内默认缓存 60 秒，可通过 `CACHE_TTL_MS` 调整；页脚链接可用 `WEBSITE_LINKS` 配置为 JSON 数组。
-
-## 节点命名格式
-如：组名/索引序号/真实节点名（就是要显示的节点名），索引序列号建议用三位数字表示，前前一位数字表示组的序号，最后两位数字表示组内节点的序号。如：
-
-```
-境内节点/000/北京，
-境内节点/001/上海，
-境外节点/100/洛杉矶，
-境外节点/101/香港
-```
-
-## 节点隐藏与显示
-* 显示：直接按照上述格式命名节点名即可显示
-* 隐藏：将要隐藏的节点名直接命名为 XXX 等不包含分组名，数字和分隔符等即只要不满足上述节点命名规则即可。
-
-## Docker 环境下部署时自定义主页页脚信息
-* 取消注释 docker-compose.yml 第 17 和 18 行：
-
-```bash
-    # volumes: 
-    #   - ./config:/app/config
-```
-
-* 下载项目中的 config 文件夹，修改 default.yml 相关配置。
-* docker 环境时自定义配置文件加载有优先级，如：custom-environment-variables.yaml > production.yml > default.yml。
-* 注意，docker-compose.yml 和 config 文件夹要在同一目录下。
-
-## Configure
-
-There are two ways to configure:
-* config files in `config/*.yml`
-* environment variables (map: [config/custom-environment-variables.yaml](config/custom-environment-variables.yaml))
-
-The file loading order is **default.yml < ${NODE_ENV}.yml < environment variables**.
-It's recommend to set secrets (e.g. API key) via environment variables and something complex (e.g. array and object) via files.
-
-## Parser Usage
-
-We use the parser to analyze groups name, monitors name and group index (optional) which included in your original monitor's name. 
-Default Parser is `%group/%name`, there are 3 variables now: 
-  - %group
-  - %name
-  - %index 
-
-You can change the backslash / to any separator you like, as long as it won't used in your group & monitor name (and index). 
-To put index into your parser, you will able to sort your group in page manually. Easily write index for each group once (also for all if you like), and leave the blank of the index for other monitors in the same group.
-
-> There is example:
-> **Group Name**/**Index**/**Monitor Name**
-> ```
-> %group/%index/%name
-> ```
-> For this format, you should write index in original name at Uptimerobots Control Panel for each group once:
-> ```
-> GroupA/1/MonitorA
-> ```
-> And leave the blank of the index for other monitors in the same group.
-> ```
-> GroupA//MonitorB
-> ```

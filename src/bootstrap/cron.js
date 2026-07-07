@@ -4,8 +4,10 @@ export default ctx => {
   const prefetchMonitors = new CronJob({
     cronTime: ctx.config.get("app.crontime"),
     onTick: function() {
-      ctx.services.uptimerobot
-        .prefetchList()
+      Promise.all([
+        ctx.services.uptimerobot.prefetchList(),
+        ctx.services.uptimerobot.prefetchStatusPage()
+      ])
         .then(() => {
           logger.debug(
             "Prefetch done. Next check at " + prefetchMonitors.nextDates()

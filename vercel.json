@@ -1,12 +1,13 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "outputDirectory": "build/public",
+  "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.js": {
       "includeFiles": [
         "build/views/**",
         "build/public/**",
+        "frontend/dist/**",
         "config/**"
       ]
     }

@@ -4,6 +4,7 @@ import KoaError from "./error";
 import { router } from "../routes";
 import UptimeRobotService from "../services/uptimerobot";
 import { join } from "path";
+import { existsSync } from "fs";
 import { logger } from "../lib/logger";
 import staticCache from "koa-static-cache";
 import { mountConfig } from "./config";
@@ -35,6 +36,29 @@ export function createAPP(options = {}) {
       extension: "pug"
     })
   );
+
+  const frontendDir = join(__dirname, "../../frontend/dist");
+  const frontendIndex = join(frontendDir, "index.html");
+
+  if (existsSync(frontendIndex)) {
+    app.use(async (ctx, next) => {
+      if (ctx.path === "/") {
+        ctx.type = "html";
+        ctx.body = require("fs").createReadStream(frontendIndex);
+        return;
+      }
+
+      await next();
+    });
+
+    app.use(
+      staticCache(frontendDir, {
+        maxAge: process.env.NODE_ENV === "production" ? 365 * 24 * 60 * 60 : 0,
+        gzip: true
+      })
+    );
+  }
+
   // static
   app.use(
     staticCache(join(__dirname, "../../build/public/"), {
