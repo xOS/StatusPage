@@ -80,7 +80,7 @@
         "nock": "^13.2.2",
         "normalize.css": "^8.0.1",
         "nyc": "^15.1.0",
-        "postcss": "^8.4.5",
+        "postcss": "^8.4.31",
         "postcss-assets": "^6.0.0",
         "postcss-custom-properties": "^9.2.0",
         "postcss-debug": "^0.4.2",
