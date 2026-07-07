@@ -6,7 +6,7 @@ export default ctx => {
     onTick: function() {
       Promise.all([
         ctx.services.uptimerobot.prefetchList(),
-        ctx.services.uptimerobot.prefetchStatusPage()
+        ctx.services.uptimerobot.warmupStatusPageCache()
       ])
         .then(() => {
           logger.debug(

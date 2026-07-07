@@ -3,11 +3,18 @@ import { Cache } from "memory-cache";
 import { logger } from "../lib/logger";
 import { Parser } from "../lib/parser";
 import { format, addDays, addSeconds, startOfDay, fromUnixTime } from "date-fns";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 
 const distance = 59;
 const statusPageDistance = 90;
 const statusPageCacheTTL = Number(process.env.CACHE_TTL_MS || 60 * 1000);
 const statusPageStaleTTL = Number(process.env.CACHE_STALE_TTL_MS || 10 * 60 * 1000);
+const statusPageDiskTTL = Number(process.env.CACHE_DISK_TTL_MS || 24 * 60 * 60 * 1000);
+const statusPageDiskCacheEnabled =
+  process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
+const statusPageCacheDir =
+  process.env.CACHE_DIR || (process.env.VERCEL ? "/tmp/status-page-cache" : join(process.cwd(), ".cache"));
 const responseTimesLimit = Number(process.env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || 48);
 
 function lastDays(distance) {
@@ -261,11 +268,10 @@ export default class UptimeRobotService {
   }
 
   async statusPage(days = statusPageDistance) {
-    const key = this.statusPageCacheKey(days);
-    const cached = this.cache.get(key);
+    const cached = this.getStatusPageCache(days);
 
     if (!cached) {
-      return await this.prefetchStatusPage(days);
+      return await this.refreshStatusPageCache(days);
     }
 
     if (cached.expiresAt > Date.now()) {
@@ -274,7 +280,9 @@ export default class UptimeRobotService {
     }
 
     logger.debug("Hit Stale Status Page Cache");
-    this.refreshStatusPageCache(days);
+    this.refreshStatusPageCache(days).catch(err => {
+      logger.error(err);
+    });
     return cached.data;
   }
 
@@ -282,29 +290,84 @@ export default class UptimeRobotService {
     return `status-page:${days}`;
   }
 
+  statusPageCacheFile(days) {
+    return join(statusPageCacheDir, `status-page-${days}.json`);
+  }
+
+  getStatusPageCache(days) {
+    const key = this.statusPageCacheKey(days);
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+
+    const diskCached = this.readStatusPageDiskCache(days);
+    if (!diskCached) return null;
+
+    this.cache.put(key, diskCached, Math.max(statusPageStaleTTL, statusPageDiskTTL));
+    return diskCached;
+  }
+
   putStatusPageCache(days, data) {
+    const now = Date.now();
     const entry = {
       data,
-      expiresAt: Date.now() + statusPageCacheTTL
+      expiresAt: now + statusPageCacheTTL,
+      savedAt: now
     };
 
-    this.cache.put(this.statusPageCacheKey(days), entry, statusPageStaleTTL);
+    this.cache.put(this.statusPageCacheKey(days), entry, Math.max(statusPageStaleTTL, statusPageDiskTTL));
+    this.writeStatusPageDiskCache(days, entry);
     return data;
+  }
+
+  warmupStatusPageCache(days = statusPageDistance) {
+    this.getStatusPageCache(days);
+    return this.refreshStatusPageCache(days).catch(err => {
+      logger.error(err);
+    });
   }
 
   refreshStatusPageCache(days) {
     const key = this.statusPageCacheKey(days);
     if (this.statusPageRefreshes[key]) return this.statusPageRefreshes[key];
 
-    this.statusPageRefreshes[key] = this.prefetchStatusPage(days)
-      .catch(err => {
-        logger.error(err);
-      })
-      .finally(() => {
-        delete this.statusPageRefreshes[key];
-      });
+    this.statusPageRefreshes[key] = this.prefetchStatusPage(days).finally(() => {
+      delete this.statusPageRefreshes[key];
+    });
 
     return this.statusPageRefreshes[key];
+  }
+
+  readStatusPageDiskCache(days) {
+    if (!statusPageDiskCacheEnabled) return null;
+
+    try {
+      const file = this.statusPageCacheFile(days);
+      if (!existsSync(file)) return null;
+
+      const entry = JSON.parse(readFileSync(file, "utf8"));
+      if (!entry || !entry.data || !entry.savedAt) return null;
+      if (Date.now() - entry.savedAt > statusPageDiskTTL) return null;
+
+      return {
+        data: entry.data,
+        expiresAt: Number(entry.expiresAt || 0),
+        savedAt: Number(entry.savedAt)
+      };
+    } catch (err) {
+      logger.warn("Failed to read status page disk cache.", err.message);
+      return null;
+    }
+  }
+
+  writeStatusPageDiskCache(days, entry) {
+    if (!statusPageDiskCacheEnabled) return;
+
+    try {
+      mkdirSync(statusPageCacheDir, { recursive: true });
+      writeFileSync(this.statusPageCacheFile(days), JSON.stringify(entry));
+    } catch (err) {
+      logger.warn("Failed to write status page disk cache.", err.message);
+    }
   }
 
   parseMonitorName(name) {

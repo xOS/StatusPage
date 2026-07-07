@@ -12,7 +12,19 @@ uptimerobot:
 
 website:
   title: WEBSITE_TITLE
+  avatar: WEBSITE_AVATAR
+  rtl: WEBSITE_RTL
   copyright: WEBSITE_COPYRIGHT
+  home:
+    label: WEBSITE_HOME_LABEL
+    href: WEBSITE_HOME_URL
+  github:
+    href: WEBSITE_GITHUB_URL
+  footer:
+    title: WEBSITE_FOOTER_TITLE
+    description: WEBSITE_FOOTER_DESCRIPTION
+    owner: WEBSITE_FOOTER_OWNER
+    owner_url: WEBSITE_FOOTER_OWNER_URL
   # links:
   #   - name: 主页
   #     href: http://about.nange.cn

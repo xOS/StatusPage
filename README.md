@@ -9,7 +9,7 @@
 * UptimeRobot API key 只保存在后端或平台环境变量中，不暴露给浏览器。
 * Koa 常驻部署会通过 cron 预取刷新缓存。
 * Vercel 和 Cloudflare Pages 通过函数动态提供 `/api/status`，不是纯静态页面。
-* 兼容旧 Pug 页面和 `/api/info`，但新版前端默认只调用 `/api/status`。
+* 兼容旧 Pug 页面，新版前端通过 `/api/status` 获取状态数据，通过 `/api/info` 获取运行时站点配置。
 
 ## 项目结构
 
@@ -58,9 +58,19 @@ npx pnpm@8.15.8 run dev
 | `UPTIME_ROBOT_API` | 是 | UptimeRobot API key |
 | `UPTIME_ROBOT_NAME_PATTERN` | 否 | 旧命名格式兼容解析规则；不设置时默认使用新版 UI 的 `${类别}` / `${分组}` |
 | `WEBSITE_TITLE` | 否 | 页面标题，默认 `服务状态` |
-| `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段 |
+| `WEBSITE_HOME_LABEL` | 否 | 页头主页链接文字，默认 `主页` |
+| `WEBSITE_HOME_URL` | 否 | 页头主页链接地址，默认 `/` |
+| `WEBSITE_GITHUB_URL` | 否 | 页头 GitHub 图标链接，默认 `https://github.com/xOS` |
+| `WEBSITE_FOOTER_TITLE` | 否 | 页脚标题；不设置时使用 `WEBSITE_TITLE` |
+| `WEBSITE_FOOTER_DESCRIPTION` | 否 | 页脚描述，默认 `由 UptimeRobot 数据驱动，自动缓存并动态更新。` |
+| `WEBSITE_FOOTER_OWNER` | 否 | 页脚版权归属者；不设置时回退到 `WEBSITE_COPYRIGHT` |
+| `WEBSITE_FOOTER_OWNER_URL` | 否 | 页脚版权归属者链接，默认 `https://www.nange.cn` |
+| `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段，也会作为页脚版权归属者兜底 |
 | `CACHE_TTL_MS` | 否 | `/api/status` 请求缓存时间，默认 `60000` |
 | `CACHE_STALE_TTL_MS` | 否 | 过期缓存可继续返回的时间，默认 `600000` |
+| `CACHE_DISK` | 否 | 是否启用磁盘缓存，设为 `false` 可关闭 |
+| `CACHE_DISK_TTL_MS` | 否 | 磁盘缓存有效期，默认 `86400000` |
+| `CACHE_DIR` | 否 | 磁盘缓存目录，默认 `.cache` |
 | `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
 | `PORT` | 否 | Koa 监听端口 |
 | `LOG_LEVEL` | 否 | 日志级别 |
@@ -90,7 +100,35 @@ GET /api/status?days=90
 
 ### `GET /api/info`
 
-兼容旧前端的信息接口。新版 UI 不再需要侧栏或个人资料卡，因此默认不调用该接口。
+新版 UI 使用的运行时站点配置接口，同时保留旧字段 `name`、`avatar`、`desc` 和 `rtl` 以兼容旧前端。
+
+```json
+{
+  "name": "服务状态",
+  "avatar": "",
+  "desc": "楠格",
+  "rtl": false,
+  "site": {
+    "title": "服务状态",
+    "home": {
+      "label": "主页",
+      "href": "/"
+    },
+    "github": {
+      "href": "https://github.com/xOS"
+    },
+    "footer": {
+      "title": "服务状态",
+      "description": "由 UptimeRobot 数据驱动，自动缓存并动态更新。",
+      "owner": "楠格",
+      "ownerUrl": "https://www.nange.cn",
+      "projectUrl": "https://github.com/xOS/StatusPage"
+    }
+  }
+}
+```
+
+页脚年份不是写死值，也不是构建时生成；前端会在浏览器运行时通过当前日期自动显示当年年份。
 
 ## 节点命名
 
@@ -139,6 +177,9 @@ GET /api/status?days=90
 ```bash
 UPTIME_ROBOT_API=你的 UptimeRobot API Key
 WEBSITE_TITLE=服务状态
+WEBSITE_HOME_URL=https://example.com
+WEBSITE_GITHUB_URL=https://github.com/xOS
+WEBSITE_FOOTER_OWNER=楠格
 ```
 
 Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/api/status`。函数环境没有常驻 cron，数据会在函数实例内按请求缓存，默认 60 秒。
@@ -158,13 +199,16 @@ Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/
 YARN_VERSION=1.22.22
 UPTIME_ROBOT_API=你的 UptimeRobot API Key
 WEBSITE_TITLE=服务状态
+WEBSITE_HOME_URL=https://example.com
+WEBSITE_GITHUB_URL=https://github.com/xOS
+WEBSITE_FOOTER_OWNER=楠格
 ```
 
 `YARN_VERSION=1.22.22` 用于让 Cloudflare Pages 使用 Yarn Classic 安装根项目依赖。Cloudflare Pages v3 构建镜像默认使用 Yarn 4，直接安装本项目的 Yarn 1 锁文件会尝试迁移锁文件并导致构建失败。
 
 Cloudflare Pages 会托管 `frontend/dist`，并通过 Pages Function 动态提供 `/api/status`。项目不再使用从旧前端带来的 Worker/KV/backup 接口。
 
-为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 命中已过期但仍可用的缓存时会先返回旧数据，并在后台刷新。首次冷启动仍需要等待 UptimeRobot 返回数据；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` 或缩短前端请求的 `days` 参数。
+为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 命中已过期但仍可用的缓存时会先返回旧数据，并在后台刷新。Koa 常驻部署还会把新版状态数据写入磁盘缓存，进程重启后可先返回上次缓存并后台刷新。首次全新部署没有历史缓存时仍需要等待 UptimeRobot 返回数据；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` 或缩短前端请求的 `days` 参数。
 
 ## Docker 部署
 

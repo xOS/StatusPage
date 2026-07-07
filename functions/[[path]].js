@@ -3,6 +3,7 @@ const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
 const CACHE_STALE_TTL_MS = 10 * 60 * 1000;
 const RESPONSE_TIMES_LIMIT = 48;
+const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 let cached;
 
@@ -48,18 +49,45 @@ export async function onRequest(context) {
     }
 
     if (url.pathname === "/api/info") {
-      return json({
-        name: env.WEBSITE_TITLE || "服务状态",
-        avatar: env.WEBSITE_AVATAR || "",
-        desc: env.WEBSITE_COPYRIGHT || "楠格",
-        rtl: env.WEBSITE_RTL === "true"
-      });
+      return json(siteInfoFromEnv(env));
     }
 
     return env.ASSETS.fetch(request);
   } catch (err) {
     return json({ message: err.message }, {}, 500);
   }
+}
+
+function siteInfoFromEnv(env) {
+  const title = env.WEBSITE_TITLE || "服务状态";
+  const owner = env.WEBSITE_FOOTER_OWNER || env.WEBSITE_COPYRIGHT || "楠格";
+  const site = {
+    title,
+    avatar: env.WEBSITE_AVATAR || "",
+    rtl: env.WEBSITE_RTL === "true",
+    home: {
+      label: env.WEBSITE_HOME_LABEL || "主页",
+      href: env.WEBSITE_HOME_URL || "/"
+    },
+    github: {
+      href: env.WEBSITE_GITHUB_URL || "https://github.com/xOS"
+    },
+    footer: {
+      title: env.WEBSITE_FOOTER_TITLE || title,
+      description: env.WEBSITE_FOOTER_DESCRIPTION || "由 UptimeRobot 数据驱动，自动缓存并动态更新。",
+      owner,
+      ownerUrl: env.WEBSITE_FOOTER_OWNER_URL || "https://www.nange.cn",
+      projectUrl: PROJECT_URL
+    }
+  };
+
+  return {
+    name: site.title,
+    avatar: site.avatar,
+    desc: site.footer.owner,
+    rtl: site.rtl,
+    site
+  };
 }
 
 async function fetchStatus(env, days) {

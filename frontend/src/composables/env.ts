@@ -9,7 +9,6 @@
  * ```
  */
 export const IN_DEV = import.meta.env.DEV
-export const TITLE = '服务状态'
 /**
  * 是否在生产环境
  * @example

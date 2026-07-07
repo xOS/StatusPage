@@ -32,6 +32,16 @@ test.serial("GET /api/status", async t => {
   scope.persist(false);
 });
 
+test.serial("GET /api/info", async t => {
+  const res = await superkoa(t.context.app).get("/api/info");
+  t.is(res.status, 200);
+  t.is(res.body.name, "服务状态");
+  t.is(res.body.site.home.label, "主页");
+  t.is(res.body.site.home.href, "/");
+  t.is(res.body.site.github.href, "https://github.com/xOS");
+  t.is(res.body.site.footer.owner, "楠格");
+});
+
 test.serial("GET /api/status with error", async t => {
   const scope = mockFail();
   const res = await superkoa(t.context.app).get("/api/status?days=89");

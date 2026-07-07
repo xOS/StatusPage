@@ -10,7 +10,19 @@ uptimerobot:
 
 website:
   title: "服务状态"
+  avatar: ""
+  rtl: false
   copyright: "楠格"
+  home:
+    label: "主页"
+    href: "/"
+  github:
+    href: "https://github.com/xOS"
+  footer:
+    title: ""
+    description: "由 UptimeRobot 数据驱动，自动缓存并动态更新。"
+    owner: ""
+    owner_url: "https://www.nange.cn"
   links:
     - name: 主页
       href: http://about.nange.cn
