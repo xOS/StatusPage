@@ -5,7 +5,7 @@ app:
   crontime: "*/1 * * * *"
 
 uptimerobot:
-  api_key: 
+  api_key:
   pattern: "%group/%index/%name"
   statuses: "2-9"
 
@@ -14,7 +14,7 @@ website:
   copyright: "楠格"
   links:
     - name: 主页
-      href: http://about.nange.cn
+      href: http://aapls.com
     - name: 楠格
       href: http://www.nange.cn
     - name: 探针
