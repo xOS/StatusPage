@@ -21,6 +21,7 @@ html.dark {
 	@apply bg-blue-700 bg-opacity-75;
 
 	background: repeating-linear-gradient(90deg, #00dc82 0, #34cdfe 50%, #0047e1);
+	border-radius: 0;
 	position: fixed;
 	z-index: 1031;
 	top: 0;

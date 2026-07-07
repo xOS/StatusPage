@@ -50,7 +50,7 @@
 				>
 					<template #trigger>
 						<i
-							class="h-5 flex-grow-1 rounded-1 hover:scale-y-110"
+							class="h-5 flex-grow-1 rounded-none hover:scale-y-110"
 							:class="
 								parseFloat(item.uptime) >= 100
 									? 'bg-green-400 hover:bg-green-500'
