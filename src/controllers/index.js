@@ -1,3 +1,5 @@
+import { normalizeDays } from "../services/uptimerobot";
+
 export const Index = async ctx => {
   await ctx.render("index", {
     config: ctx.config.get("website"),
@@ -8,8 +10,9 @@ export const Index = async ctx => {
 const REFRESH_TOKEN_ENV_KEYS = ["CACHE_REFRESH_TOKEN", "CRON_SECRET", "REFRESH_TOKEN"];
 
 export const Status = async ctx => {
-  const days = Number(ctx.query.days || 90);
+  const days = normalizeDays(ctx.query.days || 90);
   ctx.set("Cache-Control", "public, max-age=15, s-maxage=60, stale-while-revalidate=604800");
+  ctx.set("X-Status-Days", String(days));
 
   if (isRefreshAuthorized(ctx, false)) {
     ctx.body = await ctx.services.uptimerobot.refreshStatusPageCache(days);
@@ -20,7 +23,7 @@ export const Status = async ctx => {
 };
 
 export const Refresh = async ctx => {
-  const days = Number(ctx.query.days || 90);
+  const days = normalizeDays(ctx.query.days || 90);
   ctx.set("Cache-Control", "no-store");
 
   if (!isRefreshAuthorized(ctx, false)) {

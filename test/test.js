@@ -3,6 +3,7 @@ import superkoa from "superkoa";
 import nock from "nock";
 import { mockSucc, mockFail } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
+import { normalizeDays } from "../src/services/uptimerobot";
 
 test.beforeEach(({ context }) => {
   context.app = createAPP({ cron: false });
@@ -29,6 +30,15 @@ test.serial("GET /api/status", async t => {
   t.truthy(res.body.monitors.Server);
   t.is(res.body.monitors.Web.length, 2);
   t.true(res.body.logs.length >= 1);
+  scope.persist(false);
+});
+
+test.serial("GET /api/status clamps large days queries", async t => {
+  const scope = mockSucc();
+  const res = await superkoa(t.context.app).get("/api/status?days=999");
+  t.is(res.status, 200);
+  t.is(res.headers["x-status-days"], "90");
+  t.truthy(res.body.monitors.Web);
   scope.persist(false);
 });
 
@@ -100,4 +110,10 @@ test.serial("GET /api/status with error", async t => {
   const res = await superkoa(t.context.app).get("/api/status?days=89");
   t.is(res.status, 500);
   scope.persist(false);
+});
+
+test("normalizes status page days and configures API timeout", t => {
+  t.is(normalizeDays(999), 90);
+  t.is(normalizeDays("0"), 90);
+  t.is(t.context.app.context.services.uptimerobot.api.__client.axios.defaults.timeout, 12000);
 });

@@ -68,8 +68,8 @@ export const siteInfoRequest = () => {
 }
 
 function normalizeSiteInfo(response?: SiteInfoResponse): SiteInfo {
-	const site = response?.site || {}
-	const footer = site.footer || {}
+	const site: NonNullable<SiteInfoResponse['site']> = response?.site || {}
+	const footer = (site.footer || {}) as Partial<SiteInfo['footer']>
 	const title = site.title || response?.name || defaultSiteInfo.title
 	const owner = footer.owner || response?.desc || defaultSiteInfo.footer.owner
 

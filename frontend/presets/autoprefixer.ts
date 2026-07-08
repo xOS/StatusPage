@@ -10,13 +10,12 @@ export default function autoprefixerPreset(
 		name: 'unocss-preset-autoprefixer',
 		postprocess: (util) => {
 			const entries = util.entries
+			const style = entries
+				.filter((item) => !item[0].startsWith('--un'))
+				.map((x) => x.join(':'))
+				.join(';')
 			const { code } = transformStyleAttribute({
-				code: Buffer.from(
-					entries
-						.filter((item) => !item[0].startsWith('--un'))
-						.map((x) => x.join(':'))
-						.join(';'),
-				),
+				code: new TextEncoder().encode(style),
 				targets: browserslistToTargets(browserslist(targets)),
 				minify: true,
 			})

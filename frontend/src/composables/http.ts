@@ -1,7 +1,10 @@
 import axios from 'axios'
 
+const apiTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000)
+
 export const http = axios.create({
 	baseURL: import.meta.env.VITE_API_BASE_URL,
+	timeout: Number.isFinite(apiTimeout) && apiTimeout > 0 ? apiTimeout : 15000,
 })
 
 // 添加请求拦截器
@@ -34,6 +37,9 @@ http.interceptors.response.use(
 		const status = error.response?.status
 		let { msg, message } = error.response?.data ?? {}
 
+		if (error.code === 'ECONNABORTED' || error.code === 'ERR_CANCELED') {
+			msg = '接口响应超时，请稍后重试'
+		}
 		if (!msg && message) {
 			msg = message
 		}

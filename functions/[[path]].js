@@ -3,6 +3,7 @@ const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
 const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
+const UPTIME_ROBOT_TIMEOUT_MS = 12 * 1000;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
@@ -14,7 +15,7 @@ export async function onRequest(context) {
 
   try {
     if (url.pathname === "/api/status") {
-      const days = Number(url.searchParams.get("days") || DAYS);
+      const days = normalizeDays(url.searchParams.get("days"), env);
       const now = Date.now();
       const cacheKey = `status:${days}`;
 
@@ -42,7 +43,7 @@ export async function onRequest(context) {
         return json({ message: "Unauthorized cache refresh." }, { "cache-control": "no-store" }, 401);
       }
 
-      const days = Number(url.searchParams.get("days") || DAYS);
+      const days = normalizeDays(url.searchParams.get("days"), env);
       if (url.searchParams.get("wait") === "1" || url.searchParams.get("wait") === "true") {
         const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
         return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
@@ -73,6 +74,18 @@ function statusCacheHeaders(entry, now, missed = false) {
     "x-status-cache": missed ? "MISS" : entry.expiresAt > now ? "HIT" : "STALE",
     "x-status-cache-saved-at": String(entry.savedAt)
   };
+}
+
+function normalizeDays(value, env = {}) {
+  const days = Number(value || DAYS);
+  const maxDays = Math.max(1, positiveNumber(env.STATUS_PAGE_MAX_DAYS, DAYS));
+  if (!Number.isFinite(days) || days <= 0) return Math.min(DAYS, maxDays);
+  return Math.min(Math.floor(days), maxDays);
+}
+
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
 function refreshSummary(status, days) {
@@ -260,13 +273,28 @@ async function fetchStatus(env, days) {
     statuses: env.UPTIME_ROBOT_STATUSES || DEFAULT_STATUSES
   });
 
-  const response = await fetch("https://api.uptimerobot.com/v2/getMonitors", {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    body
-  });
+  const timeoutMs = positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+
+  try {
+    response = await fetch("https://api.uptimerobot.com/v2/getMonitors", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body,
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error(`UptimeRobot request timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`UptimeRobot request failed with ${response.status}.`);

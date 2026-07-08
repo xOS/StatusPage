@@ -6,6 +6,7 @@
     "module": "esnext",
     "sourceMap": true,
     "skipLibCheck": true,
+    "ignoreDeprecations": "6.0",
     "isolatedModules": true,
     "jsxImportSource": "vue",
     "esModuleInterop": true,

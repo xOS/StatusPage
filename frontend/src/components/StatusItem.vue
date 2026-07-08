@@ -32,59 +32,51 @@
 					{{ status[data?.status] }}
 				</n-tag>
 			</div>
-			<div>
-				<v-chart class="h-20" :option="chartOpt" autoresize></v-chart>
+			<div ref="chartRoot" class="h-20">
+				<v-chart
+					v-if="chartVisible"
+					class="h-20"
+					:option="chartOpt"
+					autoresize
+				></v-chart>
 			</div>
 			<div class="w-full flex space-x-0.2 md:space-x-0.5">
-				<n-tooltip
+				<i
 					v-for="(item, index) in daily"
 					:key="index"
-					placement="top"
-					display-directive="show"
-					:flip="false"
-					:delay="0"
-					:animated="false"
-					:arrow-point-to-center="true"
-					:duration="0"
-					trigger="hover"
-				>
-					<template #trigger>
-						<i
-							class="h-5 flex-grow-1 rounded-none hover:scale-y-110"
-							:class="
-								parseFloat(item.uptime) >= 100
-									? 'bg-green-400 hover:bg-green-500'
-									: item.down.times <= 0
-										? 'bg-gray-400 hover:hover:bg-gray-500'
-										: parseFloat(item.uptime) <= 50
-											? 'bg-red-400 hover:bg-red-500'
-											: 'bg-yellow-400 hover:bg-yellow-500'
-							"
-						></i>
-					</template>
-					{{ item.date.format('YYYY-MM-DD') }}
-				</n-tooltip>
+					class="h-5 flex-grow-1 rounded-none hover:scale-y-110"
+					:title="formatDay(item.date)"
+					:class="
+						parseFloat(item.uptime) >= 100
+							? 'bg-green-400 hover:bg-green-500'
+							: item.down.times <= 0
+								? 'bg-gray-400 hover:hover:bg-gray-500'
+								: parseFloat(item.uptime) <= 50
+									? 'bg-red-400 hover:bg-red-500'
+									: 'bg-yellow-400 hover:bg-yellow-500'
+					"
+				></i>
 			</div>
 			<div class="flex justify-between text-[0.6rem] text-gray-400 font-thin">
 				<div>
 					{{
 						rtl
-							? data?.daily[data?.daily.length - 1].date.format('YYYY-MM-DD')
+							? lastDayLabel
 							: '今日'
 					}}
 				</div>
 				<div>
 					{{
 						data?.total?.times
-							? `最近 90 天故障 ${data?.total?.times} 次，累计 ${formatDuration(data?.total?.duration)}，平均可用率 ${data?.average}%`
-							: `最近 90 天可用率 ${data?.average}%`
+							? `最近 ${dailyDays} 天故障 ${data?.total?.times} 次，累计 ${formatDuration(data?.total?.duration)}，平均可用率 ${data?.average}%`
+							: `最近 ${dailyDays} 天可用率 ${data?.average}%`
 					}}
 				</div>
 				<div>
 					{{
 						rtl
 							? '今日'
-							: data?.daily[data?.daily.length - 1].date.format('YYYY-MM-DD')
+							: lastDayLabel
 					}}
 				</div>
 			</div>
@@ -107,9 +99,10 @@
 import VChart, { THEME_KEY } from 'vue-echarts'
 import { use } from 'echarts/core'
 import type { EChartsOption } from 'echarts'
+import type { Dayjs } from 'dayjs'
 import { LineChart } from 'echarts/charts'
 import { isDark } from 'vue-dark-switch'
-import { _Result } from '../api/uptime'
+import type { _Result } from '../api/uptime'
 import { SVGRenderer } from 'echarts/renderers'
 import {
 	GridComponent,
@@ -133,14 +126,51 @@ const status: { [key: string]: string } = {
 	down: '无法访问',
 	unknow: '未知',
 }
+const chartRoot = ref<HTMLElement | null>(null)
+const chartVisible = ref(false)
+let chartObserver: IntersectionObserver | undefined
+
+onMounted(() => {
+	if (!('IntersectionObserver' in window)) {
+		chartVisible.value = true
+		return
+	}
+
+	chartObserver = new IntersectionObserver(
+		(entries) => {
+			if (entries.some((entry) => entry.isIntersecting)) {
+				chartVisible.value = true
+				chartObserver?.disconnect()
+				chartObserver = undefined
+			}
+		},
+		{ rootMargin: '240px 0px' },
+	)
+
+	if (chartRoot.value) {
+		chartObserver.observe(chartRoot.value)
+	}
+})
+
+onBeforeUnmount(() => {
+	chartObserver?.disconnect()
+})
+
 const daily = computed(() => {
 	if (!props.rtl) {
 		return props.data.daily
 	} else {
-		let tmp = props.data.daily
-		return tmp.reverse()
+		return [...props.data.daily].reverse()
 	}
 })
+const dailyDays = computed(() => props.data.daily.length)
+const lastDayLabel = computed(() => {
+	const item = props.data.daily[props.data.daily.length - 1]
+	return item ? formatDay(item.date) : ''
+})
+function formatDay(value: string | Dayjs) {
+	return typeof value === 'string' ? value : value.format('YYYY-MM-DD')
+}
 provide(
 	THEME_KEY,
 	computed(() => (isDark.value ? 'dark' : '')),
@@ -156,7 +186,7 @@ const chartOpt = computed<EChartsOption>(() => {
 		backgroundColor: 'transparent',
 		xAxis: {
 			type: 'category',
-			data: props.rtl ? xAxis.reverse() : xAxis,
+			data: props.rtl ? [...xAxis].reverse() : xAxis,
 
 			axisLabel: {
 				fontSize: 8,
@@ -184,7 +214,7 @@ const chartOpt = computed<EChartsOption>(() => {
 		},
 		series: [
 			{
-				data: props.rtl ? sData.reverse() : sData,
+				data: props.rtl ? [...sData].reverse() : sData,
 				smooth: true,
 				name: 'timeout',
 				type: 'line',

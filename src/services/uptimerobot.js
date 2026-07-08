@@ -8,9 +8,11 @@ import { join } from "path";
 
 const distance = 59;
 const statusPageDistance = 90;
-const statusPageCacheTTL = Number(process.env.CACHE_TTL_MS || 60 * 1000);
-const statusPageStaleTTL = Number(process.env.CACHE_STALE_TTL_MS || 0);
-const statusPageDiskTTL = Number(process.env.CACHE_DISK_TTL_MS || statusPageStaleTTL);
+const statusPageCacheTTL = positiveNumber(process.env.CACHE_TTL_MS, 60 * 1000);
+const statusPageStaleTTL = positiveNumber(process.env.CACHE_STALE_TTL_MS, 0);
+const statusPageDiskTTL = positiveNumber(process.env.CACHE_DISK_TTL_MS, statusPageStaleTTL);
+const statusPageMaxDays = positiveNumber(process.env.STATUS_PAGE_MAX_DAYS, statusPageDistance);
+const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 12 * 1000);
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
@@ -58,6 +60,9 @@ function parseOptions(name) {
 export default class UptimeRobotService {
   constructor(key) {
     this.api = new UptimeRobot(key);
+    if (this.api.__client && this.api.__client.axios) {
+      this.api.__client.axios.defaults.timeout = uptimeRobotTimeoutMs;
+    }
     this.cache = new Cache();
     this.statusPageRefreshes = {};
     const pattern = require("config").get("uptimerobot.pattern");
@@ -154,6 +159,7 @@ export default class UptimeRobotService {
   }
 
   async prefetchStatusPage(days = statusPageDistance) {
+    days = normalizeDays(days);
     const today = startOfDay(new Date());
     const dates = [];
 
@@ -269,6 +275,7 @@ export default class UptimeRobotService {
   }
 
   async statusPage(days = statusPageDistance) {
+    days = normalizeDays(days);
     const cached = this.getStatusPageCache(days);
 
     if (!cached) {
@@ -288,10 +295,12 @@ export default class UptimeRobotService {
   }
 
   statusPageCacheKey(days) {
+    days = normalizeDays(days);
     return `status-page:${days}`;
   }
 
   statusPageCacheFile(days) {
+    days = normalizeDays(days);
     return join(statusPageCacheDir, `status-page-${days}.json`);
   }
 
@@ -308,6 +317,7 @@ export default class UptimeRobotService {
   }
 
   putStatusPageCache(days, data) {
+    days = normalizeDays(days);
     const now = Date.now();
     const entry = {
       data,
@@ -331,6 +341,7 @@ export default class UptimeRobotService {
   }
 
   warmupStatusPageCache(days = statusPageDistance) {
+    days = normalizeDays(days);
     this.getStatusPageCache(days);
     return this.refreshStatusPageCache(days).catch(err => {
       logger.error(err);
@@ -338,6 +349,7 @@ export default class UptimeRobotService {
   }
 
   refreshStatusPageCache(days) {
+    days = normalizeDays(days);
     const key = this.statusPageCacheKey(days);
     if (this.statusPageRefreshes[key]) return this.statusPageRefreshes[key];
 
@@ -349,6 +361,7 @@ export default class UptimeRobotService {
   }
 
   readStatusPageDiskCache(days) {
+    days = normalizeDays(days);
     if (!statusPageDiskCacheEnabled) return null;
 
     try {
@@ -371,6 +384,7 @@ export default class UptimeRobotService {
   }
 
   writeStatusPageDiskCache(days, entry) {
+    days = normalizeDays(days);
     if (!statusPageDiskCacheEnabled) return;
 
     try {
@@ -401,4 +415,16 @@ export default class UptimeRobotService {
 
     return result;
   }
+}
+
+export function normalizeDays(value) {
+  const days = Number(value);
+  const maxDays = Math.max(1, statusPageMaxDays);
+  if (!Number.isFinite(days) || days <= 0) return Math.min(statusPageDistance, maxDays);
+  return Math.min(Math.floor(days), maxDays);
+}
+
+function positiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
