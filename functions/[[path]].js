@@ -4,8 +4,6 @@ const CACHE_TTL_MS = 60 * 1000;
 const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
 const UPTIME_ROBOT_TIMEOUT_MS = 12 * 1000;
-const UPTIME_ROBOT_FAST_TIMEOUT_MS = 5 * 1000;
-const STATUS_PAGE_COLD_WAIT_MS = 2500;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
@@ -21,23 +19,13 @@ export async function onRequest(context) {
       const now = Date.now();
       const cacheKey = `status:${days}`;
 
-      if (isRefreshAuthorized(request, env, false)) {
-        const refreshed = await refreshStatusCache(context, env, days, cacheKey);
-        return json(refreshed.data, statusCacheHeaders(refreshed, now, true));
-      }
-
       const cached = await readStatusCache(context, cacheKey);
 
       if (cached) {
-        if (cached.expiresAt <= now) {
-          context.waitUntil(refreshStatusCache(context, env, days, cacheKey).catch(() => {}));
-        }
-
         return json(cached.data, statusCacheHeaders(cached, now));
       }
 
-      const refreshed = await refreshStatusCacheWithFallback(context, env, days, cacheKey);
-      return json(refreshed.data, statusCacheHeaders(refreshed, now, true));
+      return json(warmingStatus(days), { "cache-control": "no-store", "x-status-cache": "MISS" }, 202);
     }
 
     if (url.pathname === "/api/refresh") {
@@ -90,38 +78,16 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
-function waitFor(promise, timeoutMs) {
-  if (timeoutMs <= 0) {
-    return Promise.reject(new Error("Status page refresh skipped initial wait."));
-  }
-
-  let timeout;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new Error(`Status page refresh did not finish within ${timeoutMs}ms.`));
-    }, timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeout);
-  });
-}
-
-function errorMessage(error) {
-  if (!error) return undefined;
-  if (error.message) return error.message;
-  if (error.error && error.error.message) return error.error.message;
-  return String(error);
-}
-
-function emptyStatus(error) {
+function warmingStatus(days) {
   return {
     monitors: {},
     logs: [],
     meta: {
-      partial: true,
+      partial: false,
+      warming: true,
+      days,
       generatedAt: new Date().toISOString(),
-      error: errorMessage(error)
+      message: "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh."
     }
   };
 }
@@ -184,38 +150,6 @@ async function refreshStatusCache(context, env, days, cacheKey) {
 
   refreshes.set(cacheKey, refresh);
   return refresh;
-}
-
-async function refreshStatusCacheWithFallback(context, env, days, cacheKey) {
-  const refresh = refreshStatusCache(context, env, days, cacheKey);
-  const coldWaitMs = positiveNumber(env.STATUS_PAGE_COLD_WAIT_MS, STATUS_PAGE_COLD_WAIT_MS);
-
-  try {
-    return await waitFor(refresh, coldWaitMs);
-  } catch (err) {
-    context.waitUntil(refresh.catch(() => {}));
-
-    try {
-      const data = await fetchFastStatus(env, days, err);
-      return writeStatusCacheEntry(context, env, cacheKey, data, 0);
-    } catch (fallbackErr) {
-      return writeStatusCacheEntry(context, env, cacheKey, emptyStatus(fallbackErr || err), 0);
-    }
-  }
-}
-
-async function writeStatusCacheEntry(context, env, cacheKey, data, ttlMs) {
-  const refreshedAt = Date.now();
-  const entry = {
-    key: cacheKey,
-    data,
-    expiresAt: refreshedAt + ttlMs,
-    savedAt: refreshedAt
-  };
-
-  memoryCache.set(cacheKey, entry);
-  await writeStatusCache(context, env, cacheKey, entry);
-  return entry;
 }
 
 async function writeStatusCache(context, env, cacheKey, entry) {
@@ -351,31 +285,6 @@ async function fetchStatus(env, days) {
   return transformMonitors(result.monitors || [], dates, env.UPTIME_ROBOT_NAME_PATTERN);
 }
 
-async function fetchFastStatus(env, days, sourceError) {
-  const apiKey = env.UPTIME_ROBOT_API;
-  if (!apiKey) {
-    throw new Error("UptimeRobot API key must be provided.");
-  }
-
-  const { dates } = uptimeRanges(days);
-  const body = new URLSearchParams({
-    api_key: apiKey,
-    format: "json",
-    custom_uptime_ratios: String(days),
-    statuses: env.UPTIME_ROBOT_STATUSES || DEFAULT_STATUSES
-  });
-
-  const result = await requestUptimeRobot(
-    body,
-    positiveNumber(env.UPTIME_ROBOT_FAST_TIMEOUT_MS, UPTIME_ROBOT_FAST_TIMEOUT_MS)
-  );
-
-  return transformMonitors(result.monitors || [], dates, env.UPTIME_ROBOT_NAME_PATTERN, {
-    partial: true,
-    error: sourceError
-  });
-}
-
 async function requestUptimeRobot(body, timeoutMs) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -411,37 +320,26 @@ async function requestUptimeRobot(body, timeoutMs) {
   return result;
 }
 
-function transformMonitors(monitors, dates, pattern, options = {}) {
+function transformMonitors(monitors, dates, pattern) {
   const data = {
     monitors: {},
-    logs: []
+    logs: [],
+    meta: {
+      partial: false,
+      generatedAt: new Date().toISOString()
+    }
   };
-  if (options.partial || options.error) {
-    data.meta = {
-      partial: true,
-      generatedAt: new Date().toISOString(),
-      error: errorMessage(options.error)
-    };
-  }
   const parser = pattern ? createParser(pattern) : null;
 
   for (const monitor of monitors) {
     const ranges = String(monitor.custom_uptime_ranges || "").split("-");
-    const average = options.partial
-      ? formatNumber(
-          monitor.custom_uptime_ratio !== undefined
-            ? monitor.custom_uptime_ratio
-            : monitor.status === 2
-              ? 100
-              : 0
-        )
-      : formatNumber(ranges.pop());
+    const average = formatNumber(ranges.pop());
     const dailyMap = {};
     const daily = dates.map((date, index) => {
       dailyMap[dateKey(date)] = index;
       return {
         date: formatIsoDate(date),
-        uptime: options.partial ? average : formatNumber(ranges[index]),
+        uptime: formatNumber(ranges[index]),
         down: {
           times: 0,
           duration: 0
@@ -455,7 +353,7 @@ function transformMonitors(monitors, dates, pattern, options = {}) {
     const parsed = parseOptions(monitor.friendly_name || "");
     const parsedName = parseMonitorName(parser, parsed.name);
 
-    for (const log of options.partial ? [] : monitor.logs || []) {
+    for (const log of monitor.logs || []) {
       if (log.type !== 1) continue;
 
       const logDate = fromUnix(log.datetime);

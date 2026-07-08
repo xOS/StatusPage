@@ -1,7 +1,7 @@
 import test from "ava";
 import superkoa from "superkoa";
 import nock from "nock";
-import { mockSucc, mockFail } from "./mock";
+import { mockSucc } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
 import { normalizeDays } from "../src/services/uptimerobot";
 
@@ -24,17 +24,20 @@ test.serial("GET /", async t => {
 
 test.serial("GET /api/status", async t => {
   const scope = mockSucc();
+  await t.context.app.context.services.uptimerobot.refreshStatusPageCache(90);
   const res = await superkoa(t.context.app).get("/api/status");
   t.is(res.status, 200);
   t.truthy(res.body.monitors.Web);
   t.truthy(res.body.monitors.Server);
   t.is(res.body.monitors.Web.length, 2);
   t.true(res.body.logs.length >= 1);
+  t.false(res.body.meta.partial);
   scope.persist(false);
 });
 
 test.serial("GET /api/status clamps large days queries", async t => {
   const scope = mockSucc();
+  await t.context.app.context.services.uptimerobot.refreshStatusPageCache(90);
   const res = await superkoa(t.context.app).get("/api/status?days=999");
   t.is(res.status, 200);
   t.is(res.headers["x-status-days"], "90");
@@ -52,24 +55,19 @@ test.serial("GET /api/status returns stale snapshot before background refresh", 
   cached.expiresAt = Date.now() - 1;
   t.context.app.context.services.uptimerobot.cache.put(key, cached);
 
-  const fail = mockFail();
   const res = await superkoa(t.context.app).get("/api/status?days=88");
   t.is(res.status, 200);
   t.truthy(res.body.monitors.Web);
   t.is(res.body.monitors.Web.length, 2);
-  fail.persist(false);
 });
 
-test.serial("statusPage returns fast snapshot when full refresh is slow", async t => {
-  const slow = mockSucc({ delay: 30 });
-  const fast = mockSucc();
-  const data = await t.context.app.context.services.uptimerobot.statusPage(87, { coldWaitMs: 1 });
+test.serial("statusPage returns warming state when no full snapshot exists", async t => {
+  const data = await t.context.app.context.services.uptimerobot.statusPage(87);
 
-  t.true(data.meta.partial);
-  t.truthy(data.monitors.Web);
+  t.true(data.meta.warming);
+  t.false(data.meta.partial);
+  t.deepEqual(data.monitors, {});
   t.is(data.logs.length, 0);
-  slow.persist(false);
-  fast.persist(false);
 });
 
 test.serial("GET /api/refresh requires token", async t => {
@@ -117,13 +115,12 @@ test.serial("GET /api/info", async t => {
   t.is(res.body.site.footer.owner, "楠格");
 });
 
-test.serial("GET /api/status with error", async t => {
-  const scope = mockFail();
+test.serial("GET /api/status without snapshot returns warming response", async t => {
   const res = await superkoa(t.context.app).get("/api/status?days=89");
-  t.is(res.status, 200);
-  t.true(res.body.meta.partial);
+  t.is(res.status, 202);
+  t.true(res.body.meta.warming);
+  t.false(res.body.meta.partial);
   t.deepEqual(res.body.monitors, {});
-  scope.persist(false);
 });
 
 test("normalizes status page days and configures API timeout", t => {

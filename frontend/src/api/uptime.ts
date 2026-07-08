@@ -39,8 +39,10 @@ export interface _Resp {
 	}>
 	meta?: {
 		partial?: boolean
+		warming?: boolean
 		generatedAt?: string
 		error?: string
+		message?: string
 	}
 }
 export const uptimeRequest = (apikey: string, days: number) => {
@@ -52,36 +54,30 @@ export const uptimeRequest = (apikey: string, days: number) => {
 		error,
 		refresh,
 	} = useRequest<_Resp>(() => http.get('/api/status', { params: { days } }))
-	let partialRefreshTimer: ReturnType<typeof setTimeout> | undefined
-	let partialRefreshCount = 0
+	let snapshotRefreshTimer: ReturnType<typeof setTimeout> | undefined
+	let snapshotRefreshCount = 0
 
 	watch(rawData, (value) => {
 		if (!value) return
 
-		cachedData.value = value
-		writeCachedStatus(cacheKey, value)
-
-		if (!value.meta?.partial) {
-			partialRefreshCount = 0
+		if (!isFullStatus(value)) {
+			scheduleRefresh()
 			return
 		}
 
-		if (partialRefreshCount >= 3) return
-		if (partialRefreshTimer) {
-			clearTimeout(partialRefreshTimer)
-		}
-		partialRefreshTimer = setTimeout(() => {
-			partialRefreshCount++
-			refresh()
-		}, 10000)
+		cachedData.value = value
+		writeCachedStatus(cacheKey, value)
+		snapshotRefreshCount = 0
 	})
 	onBeforeUnmount(() => {
-		if (partialRefreshTimer) {
-			clearTimeout(partialRefreshTimer)
+		if (snapshotRefreshTimer) {
+			clearTimeout(snapshotRefreshTimer)
 		}
 	})
 	const data = computed(() => {
-		const source = rawData.value || cachedData.value
+		const source = isFullStatus(rawData.value)
+			? rawData.value
+			: cachedData.value || rawData.value
 		if (!source) return source
 
 		return {
@@ -101,6 +97,21 @@ export const uptimeRequest = (apikey: string, days: number) => {
 		}
 	})
 	return { data, loading, error }
+
+	function scheduleRefresh() {
+		if (snapshotRefreshCount >= 6) return
+		if (snapshotRefreshTimer) {
+			clearTimeout(snapshotRefreshTimer)
+		}
+		snapshotRefreshTimer = setTimeout(() => {
+			snapshotRefreshCount++
+			refresh()
+		}, 10000)
+	}
+}
+
+function isFullStatus(data?: _Resp) {
+	return !!data && !data.meta?.partial && !data.meta?.warming
 }
 
 function statusCacheKey(days: number) {
@@ -116,6 +127,10 @@ function readCachedStatus(cacheKey: string): _Resp | undefined {
 
 		const parsed = JSON.parse(raw)
 		if (!parsed || !parsed.data || !parsed.savedAt) return undefined
+		if (!isFullStatus(parsed.data)) {
+			window.localStorage.removeItem(cacheKey)
+			return undefined
+		}
 
 		return parsed.data
 	} catch {
@@ -124,7 +139,7 @@ function readCachedStatus(cacheKey: string): _Resp | undefined {
 }
 
 function writeCachedStatus(cacheKey: string, data: _Resp) {
-	if (typeof window === 'undefined') return
+	if (typeof window === 'undefined' || !isFullStatus(data)) return
 
 	try {
 		window.localStorage.setItem(

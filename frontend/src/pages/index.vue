@@ -10,12 +10,12 @@
 				{{ uptime_error?.message }}
 			</n-alert>
 			<n-alert
-				v-if="syncWarning"
-				title="数据同步中"
+				v-if="statusNotice"
+				:title="statusNotice.title"
 				class="rounded-lg shadow"
 				type="warning"
 			>
-				{{ syncWarning }}
+				{{ statusNotice.message }}
 			</n-alert>
 			<n-alert
 				v-if="showLoading"
@@ -26,7 +26,7 @@
 				请稍后...
 			</n-alert>
 			<n-alert
-				v-if="uptime_data?.monitors && allok"
+				v-if="hasMonitors && allok"
 				title="恭喜！"
 				class="rounded-lg shadow"
 				type="success"
@@ -34,7 +34,7 @@
 				当前服务器全部运行正常。
 			</n-alert>
 			<n-alert
-				v-if="uptime_data && !allok"
+				v-if="hasMonitors && !allok"
 				title="注意"
 				class="rounded-lg shadow"
 				type="warning"
@@ -63,7 +63,7 @@
 				</div>
 			</div>
 			<div
-				v-if="showContent && !uptime_error && Object.keys(monitors).length === 0"
+				v-if="showContent && !uptime_error && !statusNotice && !hasMonitors"
 				class="border border-gray-200 rounded-lg bg-white p-6 text-center text-gray-500 shadow dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400"
 			>
 				暂无监控数据
@@ -161,10 +161,22 @@ onBeforeUnmount(() => {
 const showAllLogs = ref(false)
 
 const monitors = computed(() => uptime_data.value?.monitors || {})
+const hasMonitors = computed(() => Object.keys(monitors.value).length > 0)
 const showContent = computed(() => !uptime_loading.value || !!uptime_data.value)
-const syncWarning = computed(() => {
-	if (!uptime_data.value?.meta?.partial) return ''
-	return '完整历史数据仍在后台同步，当前先显示轻量状态快照。'
+const statusNotice = computed(() => {
+	if (uptime_data.value?.meta?.warming) {
+		return {
+			title: '快照生成中',
+			message: '后台正在生成完整状态快照，完成后页面会自动显示完整数据。',
+		}
+	}
+	if (uptime_data.value?.meta?.partial) {
+		return {
+			title: '数据同步中',
+			message: '当前数据不是完整快照，等待后台完整快照生成后会自动替换。',
+		}
+	}
+	return undefined
 })
 
 const allok = computed(() => {
