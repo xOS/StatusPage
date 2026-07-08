@@ -2,7 +2,6 @@ import UptimeRobot from "uptimerobot-apiv2";
 import { Cache } from "memory-cache";
 import { logger } from "../lib/logger";
 import { Parser } from "../lib/parser";
-import { format, addDays, addSeconds, startOfDay, fromUnixTime } from "date-fns";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 
@@ -14,6 +13,7 @@ const statusPageDiskTTL = positiveNumber(process.env.CACHE_DISK_TTL_MS, statusPa
 const statusPageMaxDays = positiveNumber(process.env.STATUS_PAGE_MAX_DAYS, statusPageDistance);
 const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 30 * 1000);
 const uptimeRobotPageSize = Math.min(50, Math.max(1, positiveNumber(process.env.UPTIME_ROBOT_PAGE_SIZE, 25)));
+const statusPageTimeZone = normalizeTimeZone(process.env.TIME_ZONE || process.env.TZ || "Asia/Shanghai");
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
@@ -21,15 +21,15 @@ const statusPageCacheDir =
 const responseTimesLimit = Number(process.env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || 48);
 
 function lastDays(distance) {
-  const now = startOfDay(new Date());
+  const now = zonedStartOfToday(statusPageTimeZone);
   const dates = [];
   const ranges = [];
   const getTime = date => Math.floor(date.getTime() / 1000);
 
   for (let i = -distance; i <= 0; i++) {
-    const day0 = addDays(now, i);
-    const day1 = addSeconds(addDays(day0, 1), -1);
-    dates.push(format(day0, "yyyy年MM月dd日"));
+    const day0 = addZonedDays(now, i, statusPageTimeZone);
+    const day1 = new Date(addZonedDays(day0, 1, statusPageTimeZone).getTime() - 1000);
+    dates.push(formatZoned(day0, "yyyy年MM月dd日", statusPageTimeZone));
     ranges.push(`${getTime(day0)}_${getTime(day1)}`);
   }
   return { dates, ranges: ranges.join("-") };
@@ -77,7 +77,7 @@ export default class UptimeRobotService {
       sum: {
         // total: 0,
         down: 0,
-        checktime: format(Date.now(), "yyyy年MM月dd日 HH:mm")
+        checktime: formatZoned(new Date(), "yyyy年MM月dd日 HH:mm", statusPageTimeZone)
       },
       groups: [
         /**
@@ -220,20 +220,20 @@ export default class UptimeRobotService {
   }
 
   statusPageRanges(days) {
-    const today = startOfDay(new Date());
+    const today = zonedStartOfToday(statusPageTimeZone);
     const dates = [];
 
     for (let d = 0; d < days; d++) {
-      dates.push(addDays(today, -d));
+      dates.push(addZonedDays(today, -d, statusPageTimeZone));
     }
 
     const getTime = date => Math.floor(date.getTime() / 1000);
     const ranges = dates.map(date => {
-      const day1 = addSeconds(addDays(date, 1), -1);
+      const day1 = new Date(addZonedDays(date, 1, statusPageTimeZone).getTime() - 1000);
       return `${getTime(date)}_${getTime(day1)}`;
     });
     const start = getTime(dates[dates.length - 1]);
-    const end = getTime(addDays(dates[0], 1));
+    const end = getTime(addZonedDays(dates[0], 1, statusPageTimeZone));
 
     ranges.push(`${start}_${end}`);
 
@@ -257,9 +257,9 @@ export default class UptimeRobotService {
       const parsedName = this.parseMonitorName(parsed.name);
       const dailyMap = {};
       const daily = dates.map((date, index) => {
-        dailyMap[format(date, "yyyyMMdd")] = index;
+        dailyMap[formatZoned(date, "yyyyMMdd", statusPageTimeZone)] = index;
         return {
-          date: format(date, "yyyy-MM-dd"),
+          date: formatZoned(date, "yyyy-MM-dd", statusPageTimeZone),
           uptime: formatNumber(uptimeRanges[index]),
           down: {
             times: 0,
@@ -276,7 +276,8 @@ export default class UptimeRobotService {
       for (const log of monitor.logs || []) {
         if (log.type !== 1) continue;
 
-        const dateKey = format(fromUnixTime(log.datetime), "yyyyMMdd");
+        const logDate = fromUnix(log.datetime);
+        const dateKey = formatZoned(logDate, "yyyyMMdd", statusPageTimeZone);
         const index = dailyMap[dateKey];
         total.times++;
         total.duration += log.duration || 0;
@@ -288,7 +289,7 @@ export default class UptimeRobotService {
 
         data.logs.push({
           name: parsedName.name,
-          datetime: format(fromUnixTime(log.datetime), "yyyy-MM-dd HH:mm:ss"),
+          datetime: formatZoned(logDate, "yyyy-MM-dd HH:mm:ss", statusPageTimeZone),
           duration: log.duration,
           reason: {
             code: log.reason && log.reason.code,
@@ -316,7 +317,7 @@ export default class UptimeRobotService {
       data.monitors[groupName].push(item);
     }
 
-    data.logs.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
+    data.logs.sort((a, b) => b.datetime.localeCompare(a.datetime));
 
     return data;
   }
@@ -561,4 +562,102 @@ function isTimeoutError(err) {
 
 function safeErrorMessage(err) {
   return err && err.message ? err.message : String(err || "Unknown refresh error.");
+}
+
+function normalizeTimeZone(value) {
+  const timeZone = value || "Asia/Shanghai";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return "Asia/Shanghai";
+  }
+}
+
+function zonedStartOfToday(timeZone) {
+  const parts = zonedParts(new Date(), timeZone);
+  return zonedTimeToUtc({
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: 0,
+    minute: 0,
+    second: 0
+  }, timeZone);
+}
+
+function addZonedDays(date, days, timeZone) {
+  const parts = zonedParts(date, timeZone);
+  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, parts.second));
+  return zonedTimeToUtc({
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds()
+  }, timeZone);
+}
+
+function fromUnix(value) {
+  return new Date(Number(value) * 1000);
+}
+
+function formatZoned(date, pattern, timeZone) {
+  const parts = zonedParts(date, timeZone);
+  return pattern
+    .replace(/yyyy/g, String(parts.year))
+    .replace(/MM/g, pad(parts.month))
+    .replace(/dd/g, pad(parts.day))
+    .replace(/HH/g, pad(parts.hour))
+    .replace(/mm/g, pad(parts.minute))
+    .replace(/ss/g, pad(parts.second));
+}
+
+function zonedParts(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = Number(part.value);
+    }
+  }
+
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute,
+    second: values.second
+  };
+}
+
+function zonedTimeToUtc(parts, timeZone) {
+  const target = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  let utc = target;
+
+  for (let i = 0; i < 3; i++) {
+    const current = zonedParts(new Date(utc), timeZone);
+    const currentAsUtc = Date.UTC(current.year, current.month - 1, current.day, current.hour, current.minute, current.second);
+    const diff = target - currentAsUtc;
+    if (diff === 0) break;
+    utc += diff;
+  }
+
+  return new Date(utc);
+}
+
+function pad(value) {
+  return String(value).padStart(2, "0");
 }

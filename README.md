@@ -65,6 +65,7 @@ npx pnpm@8.15.8 run dev
 | `WEBSITE_FOOTER_OWNER` | 否 | 页脚版权归属者；不设置时回退到 `WEBSITE_COPYRIGHT` |
 | `WEBSITE_FOOTER_OWNER_URL` | 否 | 页脚版权归属者链接，默认 `https://www.nange.cn` |
 | `WEBSITE_COPYRIGHT` | 否 | 兼容旧接口的版权字段，也会作为页脚版权归属者兜底 |
+| `TIME_ZONE` | 否 | 状态页日期范围和日志展示时区，使用 IANA 时区名，默认 `Asia/Shanghai`；也兼容 `TZ` |
 | `CACHE_TTL_MS` | 否 | 快照新鲜时间，超过后后台刷新，默认 `60000` |
 | `CACHE_STALE_TTL_MS` | 否 | 快照可继续返回的时间，默认 `0` 表示不主动过期 |
 | `CACHE_DISK` | 否 | 是否启用磁盘缓存，设为 `false` 可关闭 |
@@ -240,6 +241,7 @@ Cloudflare Pages 建议在控制台配置项目，不提交 `wrangler.toml`。�
 ```bash
 YARN_VERSION=1.22.22
 UPTIME_ROBOT_API=你的 UptimeRobot API Key
+TIME_ZONE=Asia/Shanghai
 WEBSITE_TITLE=服务状态
 WEBSITE_HOME_URL=https://example.com
 WEBSITE_GITHUB_URL=https://github.com/xOS

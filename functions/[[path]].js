@@ -9,6 +9,7 @@ const REFRESH_BUDGET_MS = 18 * 1000;
 const REFRESH_RUNNING_TIMEOUT_MS = 10 * 60 * 1000;
 const REFRESH_CONTINUE_INTERVAL_MS = 15 * 1000;
 const REFRESH_STATE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_TIME_ZONE = "Asia/Shanghai";
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
@@ -259,7 +260,8 @@ async function continueRefreshStatusCache(context, env, days, cacheKey, options 
     await writeRefreshData(env, days, refreshData);
   }
 
-  const { dates, ranges, start, end } = uptimeRanges(days);
+  const timeZone = runtimeTimeZone(env);
+  const { dates, ranges, start, end } = uptimeRanges(days, timeZone);
   ranges.push(`${start}_${end}`);
   const baseParams = statusFetchParams(env, start, end, ranges);
   const timeoutMs = positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS);
@@ -316,7 +318,7 @@ async function continueRefreshStatusCache(context, env, days, cacheKey, options 
       (!Number.isFinite(total) && page.length < pageSize);
 
     if (isComplete) {
-      const data = transformMonitors(refreshData.monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
+      const data = transformMonitors(refreshData.monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN, timeZone);
       const refreshedAt = Date.now();
       const entry = {
         key: cacheKey,
@@ -535,7 +537,8 @@ function runtimeDiagnostics(env) {
   return {
     kvBound: hasKvBinding(env),
     hasUptimeRobotApiKey: !!env.UPTIME_ROBOT_API,
-    hasRefreshToken: !!(env.CACHE_REFRESH_TOKEN || env.CRON_SECRET || env.REFRESH_TOKEN)
+    hasRefreshToken: !!(env.CACHE_REFRESH_TOKEN || env.CRON_SECRET || env.REFRESH_TOKEN),
+    timeZone: runtimeTimeZone(env)
   };
 }
 
@@ -634,7 +637,8 @@ async function fetchStatus(env, days) {
     throw new Error("UptimeRobot API key must be provided.");
   }
 
-  const { dates, ranges, start, end } = uptimeRanges(days);
+  const timeZone = runtimeTimeZone(env);
+  const { dates, ranges, start, end } = uptimeRanges(days, timeZone);
   ranges.push(`${start}_${end}`);
 
   const baseParams = statusFetchParams(env, start, end, ranges);
@@ -645,7 +649,7 @@ async function fetchStatus(env, days) {
     positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS)
   );
 
-  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
+  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN, runtimeTimeZone(env));
 }
 
 function statusFetchParams(env, start, end, ranges) {
@@ -738,7 +742,7 @@ async function requestUptimeRobot(body, timeoutMs) {
   return result;
 }
 
-function transformMonitors(monitors, dates, pattern) {
+function transformMonitors(monitors, dates, pattern, timeZone = DEFAULT_TIME_ZONE) {
   const data = {
     monitors: {},
     logs: [],
@@ -754,9 +758,9 @@ function transformMonitors(monitors, dates, pattern) {
     const average = formatNumber(ranges.pop());
     const dailyMap = {};
     const daily = dates.map((date, index) => {
-      dailyMap[dateKey(date)] = index;
+      dailyMap[dateKey(date, timeZone)] = index;
       return {
-        date: formatIsoDate(date),
+        date: formatIsoDate(date, timeZone),
         uptime: formatNumber(ranges[index]),
         down: {
           times: 0,
@@ -775,7 +779,7 @@ function transformMonitors(monitors, dates, pattern) {
       if (log.type !== 1) continue;
 
       const logDate = fromUnix(log.datetime);
-      const index = dailyMap[dateKey(logDate)];
+      const index = dailyMap[dateKey(logDate, timeZone)];
       total.times++;
       total.duration += log.duration || 0;
 
@@ -786,7 +790,7 @@ function transformMonitors(monitors, dates, pattern) {
 
       data.logs.push({
         name: parsedName.name,
-        datetime: formatDateTime(logDate),
+        datetime: formatDateTime(logDate, timeZone),
         duration: log.duration,
         reason: {
           code: log.reason && log.reason.code,
@@ -814,7 +818,7 @@ function transformMonitors(monitors, dates, pattern) {
     data.monitors[groupName].push(item);
   }
 
-  data.logs.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
+  data.logs.sort((a, b) => b.datetime.localeCompare(a.datetime));
 
   return data;
 }
@@ -867,16 +871,16 @@ function parseMonitorName(parser, name) {
   };
 }
 
-function uptimeRanges(days) {
-  const today = startOfDay(new Date());
+function uptimeRanges(days, timeZone = DEFAULT_TIME_ZONE) {
+  const today = startOfDay(new Date(), timeZone);
   const dates = [];
 
   for (let d = 0; d < days; d++) {
-    dates.push(addDays(today, -d));
+    dates.push(addDays(today, -d, timeZone));
   }
 
   const ranges = dates.map(date => {
-    const end = new Date(addDays(date, 1).getTime() - 1000);
+    const end = new Date(addDays(date, 1, timeZone).getTime() - 1000);
     return `${toUnix(date)}_${toUnix(end)}`;
   });
 
@@ -884,7 +888,7 @@ function uptimeRanges(days) {
     dates,
     ranges,
     start: toUnix(dates[dates.length - 1]),
-    end: toUnix(addDays(dates[0], 1))
+    end: toUnix(addDays(dates[0], 1, timeZone))
   };
 }
 
@@ -917,14 +921,29 @@ function formatNumber(value) {
   return (Math.floor(Number(value || 0) * 100) / 100).toString();
 }
 
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+function startOfDay(date, timeZone = DEFAULT_TIME_ZONE) {
+  const parts = zonedParts(date, timeZone);
+  return zonedTimeToUtc({
+    year: parts.year,
+    month: parts.month,
+    day: parts.day,
+    hour: 0,
+    minute: 0,
+    second: 0
+  }, timeZone);
 }
 
-function addDays(date, days) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
+function addDays(date, days, timeZone = DEFAULT_TIME_ZONE) {
+  const parts = zonedParts(date, timeZone);
+  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, parts.second));
+  return zonedTimeToUtc({
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    second: shifted.getUTCSeconds()
+  }, timeZone);
 }
 
 function fromUnix(value) {
@@ -935,16 +954,19 @@ function toUnix(date) {
   return Math.floor(date.getTime() / 1000);
 }
 
-function dateKey(date) {
-  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+function dateKey(date, timeZone = DEFAULT_TIME_ZONE) {
+  const parts = zonedParts(date, timeZone);
+  return `${parts.year}${pad(parts.month)}${pad(parts.day)}`;
 }
 
-function formatIsoDate(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+function formatIsoDate(date, timeZone = DEFAULT_TIME_ZONE) {
+  const parts = zonedParts(date, timeZone);
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
 }
 
-function formatDateTime(date) {
-  return `${formatIsoDate(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+function formatDateTime(date, timeZone = DEFAULT_TIME_ZONE) {
+  const parts = zonedParts(date, timeZone);
+  return `${formatIsoDate(date, timeZone)} ${pad(parts.hour)}:${pad(parts.minute)}:${pad(parts.second)}`;
 }
 
 function pad(value) {
@@ -957,4 +979,62 @@ function isTimeoutError(err) {
 
 function safeErrorMessage(err) {
   return err && err.message ? err.message : String(err || "Unknown refresh error.");
+}
+
+function runtimeTimeZone(env = {}) {
+  return normalizeTimeZone(env.TIME_ZONE || env.TZ || DEFAULT_TIME_ZONE);
+}
+
+function normalizeTimeZone(value) {
+  const timeZone = value || DEFAULT_TIME_ZONE;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return DEFAULT_TIME_ZONE;
+  }
+}
+
+function zonedParts(date, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = Number(part.value);
+    }
+  }
+
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute,
+    second: values.second
+  };
+}
+
+function zonedTimeToUtc(parts, timeZone) {
+  const target = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  let utc = target;
+
+  for (let i = 0; i < 3; i++) {
+    const current = zonedParts(new Date(utc), timeZone);
+    const currentAsUtc = Date.UTC(current.year, current.month - 1, current.day, current.hour, current.minute, current.second);
+    const diff = target - currentAsUtc;
+    if (diff === 0) break;
+    utc += diff;
+  }
+
+  return new Date(utc);
 }
