@@ -41,21 +41,26 @@
 				></v-chart>
 			</div>
 			<div class="w-full flex space-x-0.2 md:space-x-0.5">
-				<i
+				<n-tooltip
 					v-for="(item, index) in daily"
 					:key="index"
-					class="h-5 flex-grow-1 rounded-none hover:scale-y-110"
-					:title="formatDay(item.date)"
-					:class="
-						parseFloat(item.uptime) >= 100
-							? 'bg-green-400 hover:bg-green-500'
-							: item.down.times <= 0
-								? 'bg-gray-400 hover:hover:bg-gray-500'
-								: parseFloat(item.uptime) <= 50
-									? 'bg-red-400 hover:bg-red-500'
-									: 'bg-yellow-400 hover:bg-yellow-500'
-					"
-				></i>
+				>
+					<template #trigger>
+						<i
+							class="h-5 flex-grow-1 rounded-none hover:scale-y-110"
+							:class="
+								parseFloat(item.uptime) >= 100
+									? 'bg-green-400 hover:bg-green-500'
+									: item.down.times <= 0
+										? 'bg-gray-400 hover:bg-gray-500'
+										: parseFloat(item.uptime) <= 50
+											? 'bg-red-400 hover:bg-red-500'
+											: 'bg-yellow-400 hover:bg-yellow-500'
+							"
+						></i>
+					</template>
+					{{ formatDay(item.date) }}
+				</n-tooltip>
 			</div>
 			<div class="flex justify-between text-[0.6rem] text-gray-400 font-thin">
 				<div>
