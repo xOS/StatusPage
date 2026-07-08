@@ -3,7 +3,8 @@ const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
 const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
-const UPTIME_ROBOT_TIMEOUT_MS = 12 * 1000;
+const UPTIME_ROBOT_TIMEOUT_MS = 30 * 1000;
+const UPTIME_ROBOT_PAGE_SIZE = 25;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
@@ -264,7 +265,7 @@ async function fetchStatus(env, days) {
   const { dates, ranges, start, end } = uptimeRanges(days);
   ranges.push(`${start}_${end}`);
 
-  const body = new URLSearchParams({
+  const baseParams = {
     api_key: apiKey,
     format: "json",
     logs: "1",
@@ -275,14 +276,55 @@ async function fetchStatus(env, days) {
     logs_end_date: String(end),
     custom_uptime_ranges: ranges.join("-"),
     statuses: env.UPTIME_ROBOT_STATUSES || DEFAULT_STATUSES
-  });
+  };
 
-  const result = await requestUptimeRobot(
-    body,
+  const monitors = await fetchAllMonitors(
+    baseParams,
+    env,
     positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS)
   );
 
-  return transformMonitors(result.monitors || [], dates, env.UPTIME_ROBOT_NAME_PATTERN);
+  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
+}
+
+async function fetchAllMonitors(params, env, timeoutMs) {
+  let pageSize = Math.min(50, Math.max(1, positiveNumber(env.UPTIME_ROBOT_PAGE_SIZE, UPTIME_ROBOT_PAGE_SIZE)));
+  const monitors = [];
+  let offset = 0;
+
+  while (true) {
+    let result;
+    try {
+      result = await requestUptimeRobot(new URLSearchParams({
+        ...params,
+        offset: String(offset),
+        limit: String(pageSize)
+      }), timeoutMs);
+    } catch (err) {
+      if (isTimeoutError(err) && pageSize > 1) {
+        pageSize = Math.max(1, Math.floor(pageSize / 2));
+        continue;
+      }
+
+      throw err;
+    }
+
+    const page = Array.isArray(result.monitors) ? result.monitors : [];
+    monitors.push(...page);
+
+    const pagination = result.pagination || {};
+    const currentOffset = Number.isFinite(Number(pagination.offset)) ? Number(pagination.offset) : offset;
+    const total = Number(pagination.total);
+
+    if (!Number.isFinite(total) || page.length === 0 || monitors.length >= total) {
+      break;
+    }
+
+    offset = currentOffset + page.length;
+    if (offset <= currentOffset) break;
+  }
+
+  return monitors;
 }
 
 async function requestUptimeRobot(body, timeoutMs) {
@@ -531,4 +573,8 @@ function formatDateTime(date) {
 
 function pad(value) {
   return String(value).padStart(2, "0");
+}
+
+function isTimeoutError(err) {
+  return err && /timeout|timed out/i.test(err.message || "");
 }

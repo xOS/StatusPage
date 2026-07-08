@@ -12,7 +12,8 @@ const statusPageCacheTTL = positiveNumber(process.env.CACHE_TTL_MS, 60 * 1000);
 const statusPageStaleTTL = positiveNumber(process.env.CACHE_STALE_TTL_MS, 0);
 const statusPageDiskTTL = positiveNumber(process.env.CACHE_DISK_TTL_MS, statusPageStaleTTL);
 const statusPageMaxDays = positiveNumber(process.env.STATUS_PAGE_MAX_DAYS, statusPageDistance);
-const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 12 * 1000);
+const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 30 * 1000);
+const uptimeRobotPageSize = Math.min(50, Math.max(1, positiveNumber(process.env.UPTIME_ROBOT_PAGE_SIZE, 25)));
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
@@ -93,7 +94,7 @@ export default class UptimeRobotService {
       ]
     };
     const { dates, ranges } = lastDays(distance);
-    const { monitors } = await this.api.getMonitors({
+    const monitors = await this.fetchAllMonitors({
       custom_uptime_ratios: distance,
       custom_uptime_ranges: ranges,
       statuses: require("config").get("uptimerobot.statuses")
@@ -162,7 +163,7 @@ export default class UptimeRobotService {
     days = normalizeDays(days);
     const { dates, ranges, start, end } = this.statusPageRanges(days);
 
-    const { monitors } = await this.api.getMonitors({
+    const monitors = await this.fetchAllMonitors({
       logs: 1,
       log_types: "1-2",
       response_times: 1,
@@ -174,6 +175,47 @@ export default class UptimeRobotService {
     });
 
     return this.putStatusPageCache(days, this.buildStatusPageData(monitors, dates));
+  }
+
+  async fetchAllMonitors(params = {}) {
+    const monitors = [];
+    let offset = 0;
+    let pageSize = uptimeRobotPageSize;
+
+    while (true) {
+      let result;
+      try {
+        result = await this.api.getMonitors({
+          ...params,
+          offset,
+          limit: pageSize
+        });
+      } catch (err) {
+        if (isTimeoutError(err) && pageSize > 1) {
+          pageSize = Math.max(1, Math.floor(pageSize / 2));
+          logger.warn(`UptimeRobot request timed out; retrying with page size ${pageSize}.`);
+          continue;
+        }
+
+        throw err;
+      }
+
+      const page = Array.isArray(result.monitors) ? result.monitors : [];
+      monitors.push(...page);
+
+      const pagination = result.pagination || {};
+      const currentOffset = Number.isFinite(Number(pagination.offset)) ? Number(pagination.offset) : offset;
+      const total = Number(pagination.total);
+
+      if (!Number.isFinite(total) || page.length === 0 || monitors.length >= total) {
+        break;
+      }
+
+      offset = currentOffset + page.length;
+      if (offset <= currentOffset) break;
+    }
+
+    return monitors;
   }
 
   statusPageRanges(days) {
@@ -453,4 +495,8 @@ export function normalizeDays(value) {
 function positiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function isTimeoutError(err) {
+  return err && (err.code === "ECONNABORTED" || /timeout|timed out/i.test(err.message || ""));
 }

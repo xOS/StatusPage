@@ -91,9 +91,64 @@ export function mockSucc(options = {}) {
   return request.reply(200, successResponse);
 }
 
+export function mockPaginatedSucc() {
+  return nock("https://api.uptimerobot.com")
+    .post("/v2/getMonitors", body => hasParams(body, { offset: "0", limit: "25" }))
+    .reply(200, {
+      stat: "ok",
+      pagination: {
+        offset: 0,
+        limit: 25,
+        total: successResponse.monitors.length
+      },
+      monitors: successResponse.monitors.slice(0, 3)
+    })
+    .post("/v2/getMonitors", body => hasParams(body, { offset: "3", limit: "25" }))
+    .reply(200, {
+      stat: "ok",
+      pagination: {
+        offset: 3,
+        limit: 25,
+        total: successResponse.monitors.length
+      },
+      monitors: successResponse.monitors.slice(3)
+    });
+}
+
+export function mockTimeoutThenPaginatedSucc() {
+  return nock("https://api.uptimerobot.com")
+    .post("/v2/getMonitors", body => hasParams(body, { offset: "0", limit: "25" }))
+    .replyWithError({
+      code: "ECONNABORTED",
+      message: "timeout of 30000ms exceeded"
+    })
+    .post("/v2/getMonitors", body => hasParams(body, { offset: "0", limit: "12" }))
+    .reply(200, {
+      stat: "ok",
+      pagination: {
+        offset: 0,
+        limit: 12,
+        total: successResponse.monitors.length
+      },
+      monitors: successResponse.monitors
+    });
+}
+
 export function mockFail() {
   return nock("https://api.uptimerobot.com")
     .persist()
     .post("/v2/getMonitors")
     .reply(502);
+}
+
+function hasParams(body, expected) {
+  const get = key => {
+    if (typeof body === "string") {
+      return new URLSearchParams(body).get(key);
+    }
+
+    return body && body[key];
+  };
+
+  return Object.entries(expected).every(([key, value]) => String(get(key)) === value);
 }

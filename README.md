@@ -72,7 +72,8 @@ npx pnpm@8.15.8 run dev
 | `CACHE_DIR` | 否 | 磁盘缓存目录，默认 `.cache` |
 | `CACHE_REFRESH_TOKEN` | 否 | 手动预热 `/api/refresh` 的访问令牌；也兼容 `CRON_SECRET` / `REFRESH_TOKEN` |
 | `STATUS_PAGE_MAX_DAYS` | 否 | `/api/status?days=` 最大允许天数，默认 `90`，用于避免异常大查询拖慢接口 |
-| `UPTIME_ROBOT_TIMEOUT_MS` | 否 | 后端请求 UptimeRobot 的超时时间，默认 `12000` |
+| `UPTIME_ROBOT_TIMEOUT_MS` | 否 | 后端单次请求 UptimeRobot 的超时时间，默认 `30000` |
+| `UPTIME_ROBOT_PAGE_SIZE` | 否 | 后端分页拉取 UptimeRobot 监控的每页数量，默认 `25`，最大 `50` |
 | `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
 | `VITE_API_TIMEOUT_MS` | 否 | 浏览器端 API 请求超时时间，默认 `15000` |
 | `PORT` | 否 | Koa 监听端口 |
@@ -111,9 +112,9 @@ GET /api/status?days=90
 GET /api/refresh?days=90&token=your-token
 ```
 
-该接口默认立即返回 `202 Accepted`，刷新任务在后台执行，适合 UptimeRobot、Vercel Cron、GitHub Actions 等定时器调用。
+该接口默认立即返回 `202 Accepted`，刷新任务在后台执行，适合 UptimeRobot、Vercel Cron、Cloudflare Pages、GitHub Actions 等定时器调用。刷新过程中后端会按页拉取 UptimeRobot 监控，避免一次性大响应导致超时。
 
-如果需要同步等待刷新结果，可加 `wait=1`。同步模式只返回刷新摘要，不返回完整状态数据：
+如果需要在本地或常驻 Koa 服务里同步等待刷新结果，可加 `wait=1`。Cloudflare Pages 不建议使用同步等待，监控数量多时应直接调用默认异步接口，稍后再访问 `/api/status` 确认快照是否生成。同步模式只返回刷新摘要，不返回完整状态数据：
 
 ```http
 GET /api/refresh?wait=1&token=your-token
@@ -247,7 +248,7 @@ KV 里的键值不需要手动创建。首次成功调用 `/api/refresh` 后，�
 2. 进入 Pages 项目：`Settings` -> `Bindings` -> `Add` -> `KV namespace`。
 3. `Variable name` 填 `STATUS_CACHE`，`KV namespace` 选择刚创建的 namespace。
 4. 保存后重新部署 Cloudflare Pages。
-5. 部署完成后调用一次 `/api/refresh?wait=1&token=your-token`，成功后 KV 会自动写入 `status:90`。
+5. 部署完成后调用一次 `/api/refresh?token=your-token`，接口返回 `202` 后等待几十秒，再访问 `/api/status`；刷新成功后 KV 会自动写入 `status:90`。
 
 Cloudflare Pages 没有本项目 Koa 进程那样的常驻 cron。需要提前刷新时，可用 Cloudflare Worker Cron、UptimeRobot、GitHub Actions 或其他外部定时器请求：
 

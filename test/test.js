@@ -1,7 +1,7 @@
 import test from "ava";
 import superkoa from "superkoa";
 import nock from "nock";
-import { mockSucc } from "./mock";
+import { mockPaginatedSucc, mockSucc, mockTimeoutThenPaginatedSucc } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
 import { normalizeDays } from "../src/services/uptimerobot";
 
@@ -91,6 +91,32 @@ test.serial("GET /api/refresh returns summary only", async t => {
   scope.persist(false);
 });
 
+test.serial("GET /api/refresh fetches all UptimeRobot pages", async t => {
+  const scope = mockPaginatedSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh?wait=1&token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 200);
+  t.true(scope.isDone());
+  t.is(res.body.groups, 3);
+  t.is(res.body.monitors, 5);
+});
+
+test.serial("GET /api/refresh retries timed out UptimeRobot pages with smaller page size", async t => {
+  const scope = mockTimeoutThenPaginatedSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh?wait=1&token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 200);
+  t.true(scope.isDone());
+  t.is(res.body.groups, 3);
+  t.is(res.body.monitors, 5);
+});
+
 test.serial("GET /api/refresh supports async response", async t => {
   const scope = mockSucc();
   process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
@@ -126,5 +152,5 @@ test.serial("GET /api/status without snapshot returns warming response", async t
 test("normalizes status page days and configures API timeout", t => {
   t.is(normalizeDays(999), 90);
   t.is(normalizeDays("0"), 90);
-  t.is(t.context.app.context.services.uptimerobot.api.__client.axios.defaults.timeout, 12000);
+  t.is(t.context.app.context.services.uptimerobot.api.__client.axios.defaults.timeout, 30000);
 });
