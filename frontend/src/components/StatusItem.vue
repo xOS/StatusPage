@@ -44,6 +44,7 @@
 				<n-tooltip
 					v-for="(item, index) in daily"
 					:key="index"
+					style="font-size: 10px; padding: 2px 6px;"
 				>
 					<template #trigger>
 						<i
