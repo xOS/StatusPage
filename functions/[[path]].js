@@ -5,6 +5,10 @@ const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
 const UPTIME_ROBOT_TIMEOUT_MS = 30 * 1000;
 const UPTIME_ROBOT_PAGE_SIZE = 25;
+const REFRESH_BUDGET_MS = 18 * 1000;
+const REFRESH_RUNNING_TIMEOUT_MS = 10 * 60 * 1000;
+const REFRESH_CONTINUE_INTERVAL_MS = 15 * 1000;
+const REFRESH_STATE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
@@ -28,6 +32,9 @@ export async function onRequest(context) {
       }
 
       const refreshState = await readRefreshState(env, days);
+      if (shouldContinueRefreshState(refreshState, env)) {
+        context.waitUntil(refreshStatusCache(context, env, days, cacheKey, { resume: true }).catch(() => {}));
+      }
       return json(
         warmingStatus(days, refreshState, runtimeDiagnostics(env)),
         { "cache-control": "no-store", "x-status-cache": "MISS" },
@@ -42,12 +49,26 @@ export async function onRequest(context) {
 
       const days = normalizeDays(url.searchParams.get("days"), env);
       if (url.searchParams.get("wait") === "1" || url.searchParams.get("wait") === "true") {
-        const refreshed = await refreshStatusCache(context, env, days, `status:${days}`);
-        return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
+        const refreshed = await refreshStatusCache(context, env, days, `status:${days}`, {
+          force: url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true"
+        });
+        if (refreshed.complete && refreshed.entry) {
+          return json(refreshSummary(refreshed.entry.data, days), { "cache-control": "no-store" });
+        }
+
+        return json({
+          ok: true,
+          accepted: true,
+          complete: false,
+          days,
+          refresh: refreshed.state,
+          diagnostics: runtimeDiagnostics(env)
+        }, { "cache-control": "no-store" }, 202);
       }
 
       const cacheKey = `status:${days}`;
       const alreadyRunning = refreshes.has(cacheKey);
+      const force = url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true";
       const refreshStateStorage = alreadyRunning
         ? null
         : await writeRefreshState(env, days, {
@@ -56,7 +77,7 @@ export async function onRequest(context) {
             diagnostics: runtimeDiagnostics(env)
           });
 
-      context.waitUntil(refreshStatusCache(context, env, days, cacheKey).catch(() => {}));
+      context.waitUntil(refreshStatusCache(context, env, days, cacheKey, { force }).catch(() => {}));
       return json({
         ok: true,
         accepted: true,
@@ -141,7 +162,10 @@ function warmingMessage(refreshState, diagnostics) {
     return `Status snapshot refresh failed: ${refreshState.error}`;
   }
   if (refreshState && refreshState.status === "running") {
-    return "Status snapshot refresh is still running. Wait a moment, then request /api/status again.";
+    return "Status snapshot refresh is still running. Progress is saved in KV and the next refresh/status request will continue it.";
+  }
+  if (refreshState && refreshState.status === "queued") {
+    return "Status snapshot refresh is queued. The next refresh/status request will continue it.";
   }
   return "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh.";
 }
@@ -183,50 +207,157 @@ async function readStatusCache(context, cacheKey) {
   }
 }
 
-async function refreshStatusCache(context, env, days, cacheKey) {
+async function refreshStatusCache(context, env, days, cacheKey, options = {}) {
   if (refreshes.has(cacheKey)) return refreshes.get(cacheKey);
 
-  await writeRefreshState(env, days, {
-    status: "running",
-    startedAt: new Date().toISOString(),
-    diagnostics: runtimeDiagnostics(env)
-  });
-
-  const refresh = fetchStatus(env, days).then(async data => {
-    const refreshedAt = Date.now();
-    const entry = {
-      key: cacheKey,
-      data,
-      expiresAt: refreshedAt + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
-      savedAt: refreshedAt
-    };
-
-    memoryCache.set(cacheKey, entry);
-    const storage = await writeStatusCache(context, env, cacheKey, entry);
-    await writeRefreshState(env, days, {
-      status: "success",
-      finishedAt: new Date().toISOString(),
-      summary: refreshSummary(data, days),
-      storage,
-      diagnostics: runtimeDiagnostics(env)
-    });
-    return entry;
-  })
-    .catch(async err => {
-      await writeRefreshState(env, days, {
-        status: "failed",
-        finishedAt: new Date().toISOString(),
-        error: safeErrorMessage(err),
-        diagnostics: runtimeDiagnostics(env)
-      });
-      throw err;
-    })
+  const refresh = runRefreshStatusCache(context, env, days, cacheKey, options)
     .finally(() => {
       refreshes.delete(cacheKey);
     });
 
   refreshes.set(cacheKey, refresh);
   return refresh;
+}
+
+async function runRefreshStatusCache(context, env, days, cacheKey, options = {}) {
+  try {
+    const result = await continueRefreshStatusCache(context, env, days, cacheKey, options);
+    return result;
+  } catch (err) {
+    await writeRefreshState(env, days, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      error: safeErrorMessage(err),
+      diagnostics: runtimeDiagnostics(env)
+    });
+    throw err;
+  }
+}
+
+async function continueRefreshStatusCache(context, env, days, cacheKey, options = {}) {
+  if (!env.UPTIME_ROBOT_API) {
+    throw new Error("UptimeRobot API key must be provided.");
+  }
+
+  const previousState = options.force ? null : await readRefreshState(env, days);
+  const canResume = isContinuableRefreshState(previousState, env);
+  const startedAt = canResume && previousState.startedAt ? previousState.startedAt : new Date().toISOString();
+  const progress = canResume && previousState.progress ? previousState.progress : {};
+  let pageSize = Math.min(50, Math.max(1, positiveNumber(progress.pageSize || env.UPTIME_ROBOT_PAGE_SIZE, UPTIME_ROBOT_PAGE_SIZE)));
+  let offset = Math.max(0, Number(progress.offset || 0));
+  let total = Number(progress.total);
+  if (!Number.isFinite(total)) total = null;
+
+  let refreshData = canResume ? await readRefreshData(env, days) : null;
+  if (!refreshData || !Array.isArray(refreshData.monitors)) {
+    refreshData = {
+      monitors: [],
+      startedAt
+    };
+    offset = 0;
+    total = null;
+    await writeRefreshData(env, days, refreshData);
+  }
+
+  const { dates, ranges, start, end } = uptimeRanges(days);
+  ranges.push(`${start}_${end}`);
+  const baseParams = statusFetchParams(env, start, end, ranges);
+  const timeoutMs = positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS);
+  const budgetMs = Math.max(1000, positiveNumber(env.UPTIME_ROBOT_REFRESH_BUDGET_MS, REFRESH_BUDGET_MS));
+  const deadline = Date.now() + budgetMs;
+
+  await writeRefreshState(env, days, {
+    status: "running",
+    startedAt,
+    progress: refreshProgress(offset, total, refreshData.monitors.length, pageSize),
+    diagnostics: runtimeDiagnostics(env)
+  });
+
+  while (Date.now() < deadline) {
+    let result;
+    try {
+      result = await requestUptimeRobot(new URLSearchParams({
+        ...baseParams,
+        offset: String(offset),
+        limit: String(pageSize)
+      }), timeoutMs);
+    } catch (err) {
+      if (isTimeoutError(err) && pageSize > 1) {
+        pageSize = Math.max(1, Math.floor(pageSize / 2));
+        await writeRefreshState(env, days, {
+          status: "running",
+          startedAt,
+          progress: refreshProgress(offset, total, refreshData.monitors.length, pageSize),
+          note: `UptimeRobot page timed out; retrying with page size ${pageSize}.`,
+          diagnostics: runtimeDiagnostics(env)
+        });
+        continue;
+      }
+
+      throw err;
+    }
+
+    const page = Array.isArray(result.monitors) ? result.monitors : [];
+    refreshData.monitors.push(...page);
+
+    const pagination = result.pagination || {};
+    const currentOffset = Number.isFinite(Number(pagination.offset)) ? Number(pagination.offset) : offset;
+    const parsedTotal = Number(pagination.total);
+    if (Number.isFinite(parsedTotal)) {
+      total = parsedTotal;
+    }
+
+    offset = currentOffset + page.length;
+    await writeRefreshData(env, days, refreshData);
+
+    const isComplete =
+      page.length === 0 ||
+      (Number.isFinite(total) && refreshData.monitors.length >= total) ||
+      (!Number.isFinite(total) && page.length < pageSize);
+
+    if (isComplete) {
+      const data = transformMonitors(refreshData.monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
+      const refreshedAt = Date.now();
+      const entry = {
+        key: cacheKey,
+        data,
+        expiresAt: refreshedAt + Number(env.CACHE_TTL_MS || CACHE_TTL_MS),
+        savedAt: refreshedAt
+      };
+
+      memoryCache.set(cacheKey, entry);
+      const storage = await writeStatusCache(context, env, cacheKey, entry);
+      await deleteRefreshData(env, days);
+      const state = await writeAndReturnRefreshState(env, days, {
+        status: "success",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        progress: refreshProgress(offset, total, refreshData.monitors.length, pageSize),
+        summary: refreshSummary(data, days),
+        storage,
+        diagnostics: runtimeDiagnostics(env)
+      });
+
+      return { complete: true, entry, state };
+    }
+
+    await writeRefreshState(env, days, {
+      status: "running",
+      startedAt,
+      progress: refreshProgress(offset, total, refreshData.monitors.length, pageSize),
+      diagnostics: runtimeDiagnostics(env)
+    });
+  }
+
+  const state = await writeAndReturnRefreshState(env, days, {
+    status: "running",
+    startedAt,
+    progress: refreshProgress(offset, total, refreshData.monitors.length, pageSize),
+    note: "Refresh paused before the platform time budget. Call /api/refresh again or let /api/status continue it in the background.",
+    diagnostics: runtimeDiagnostics(env)
+  });
+
+  return { complete: false, state };
 }
 
 async function writeStatusCache(context, env, cacheKey, entry) {
@@ -304,37 +435,84 @@ function refreshStateKey(days) {
   return `refresh:${days}`;
 }
 
+function refreshDataKey(days) {
+  return `refresh-data:${days}`;
+}
+
 async function readRefreshState(env, days) {
   const key = refreshStateKey(days);
-  const cached = refreshStateCache.get(key);
-  if (cached) return cached;
+  const entry = await readKvJson(env, key) || refreshStateCache.get(key);
+  if (!entry) return null;
 
-  const entry = await readKvJson(env, key);
-  if (entry) {
-    refreshStateCache.set(key, entry);
-    return entry;
+  const normalized = normalizeRefreshState(entry, env);
+  refreshStateCache.set(key, normalized);
+  if (normalized !== entry) {
+    await writeRefreshState(env, days, normalized);
   }
 
-  return null;
+  return normalized;
 }
 
 async function writeRefreshState(env, days, state) {
-  const key = refreshStateKey(days);
-  const entry = {
-    days,
-    updatedAt: new Date().toISOString(),
-    ...state
-  };
-
-  refreshStateCache.set(key, entry);
+  const entry = refreshStateEntry(days, state);
+  refreshStateCache.set(refreshStateKey(days), entry);
 
   if (!hasKvBinding(env)) return { ok: false, reason: "STATUS_CACHE binding is not available." };
 
   try {
-    await env.STATUS_CACHE.put(key, JSON.stringify(entry), { expirationTtl: 7 * 24 * 60 * 60 });
-    return { ok: true, key };
+    await env.STATUS_CACHE.put(refreshStateKey(days), JSON.stringify(entry), { expirationTtl: REFRESH_STATE_TTL_SECONDS });
+    return { ok: true, key: refreshStateKey(days) };
   } catch {
     return { ok: false, reason: "Failed to write refresh state to KV." };
+  }
+}
+
+async function writeAndReturnRefreshState(env, days, state) {
+  const entry = refreshStateEntry(days, state);
+  refreshStateCache.set(refreshStateKey(days), entry);
+
+  if (hasKvBinding(env)) {
+    try {
+      await env.STATUS_CACHE.put(refreshStateKey(days), JSON.stringify(entry), { expirationTtl: REFRESH_STATE_TTL_SECONDS });
+    } catch {
+      // The response still carries the state for diagnostics.
+    }
+  }
+
+  return entry;
+}
+
+function refreshStateEntry(days, state) {
+  const key = refreshStateKey(days);
+  return {
+    days,
+    updatedAt: new Date().toISOString(),
+    ...state
+  };
+}
+
+async function readRefreshData(env, days) {
+  return readKvJson(env, refreshDataKey(days));
+}
+
+async function writeRefreshData(env, days, data) {
+  if (!hasKvBinding(env)) return { ok: false, reason: "STATUS_CACHE binding is not available." };
+
+  try {
+    await env.STATUS_CACHE.put(refreshDataKey(days), JSON.stringify(data), { expirationTtl: REFRESH_STATE_TTL_SECONDS });
+    return { ok: true, key: refreshDataKey(days) };
+  } catch {
+    return { ok: false, reason: "Failed to write refresh data to KV." };
+  }
+}
+
+async function deleteRefreshData(env, days) {
+  if (!hasKvBinding(env) || typeof env.STATUS_CACHE.delete !== "function") return;
+
+  try {
+    await env.STATUS_CACHE.delete(refreshDataKey(days));
+  } catch {
+    // Leaving temporary data in KV is harmless; it expires automatically.
   }
 }
 
@@ -358,6 +536,51 @@ function runtimeDiagnostics(env) {
     kvBound: hasKvBinding(env),
     hasUptimeRobotApiKey: !!env.UPTIME_ROBOT_API,
     hasRefreshToken: !!(env.CACHE_REFRESH_TOKEN || env.CRON_SECRET || env.REFRESH_TOKEN)
+  };
+}
+
+function normalizeRefreshState(state, env) {
+  const active = !!state && (state.status === "queued" || state.status === "running");
+  if (!active || !isRefreshStateExpired(state, env)) return state;
+
+  return {
+    ...state,
+    status: "failed",
+    finishedAt: new Date().toISOString(),
+    error: `Refresh did not finish within ${refreshRunningTimeoutMs(env)}ms. It was likely interrupted by the platform; call /api/refresh?force=1 to restart.`
+  };
+}
+
+function isContinuableRefreshState(state, env) {
+  return !!state && (state.status === "queued" || state.status === "running") && !isRefreshStateExpired(state, env);
+}
+
+function shouldContinueRefreshState(state, env) {
+  if (!isContinuableRefreshState(state, env)) return false;
+
+  const timestamp = Date.parse(state.updatedAt || state.startedAt || state.queuedAt || "");
+  if (!Number.isFinite(timestamp)) return true;
+
+  const interval = Math.max(1000, positiveNumber(env.UPTIME_ROBOT_REFRESH_CONTINUE_INTERVAL_MS, REFRESH_CONTINUE_INTERVAL_MS));
+  return Date.now() - timestamp > interval;
+}
+
+function isRefreshStateExpired(state, env) {
+  const timestamp = Date.parse(state.updatedAt || state.startedAt || state.queuedAt || "");
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp > refreshRunningTimeoutMs(env);
+}
+
+function refreshRunningTimeoutMs(env) {
+  return Math.max(1000, positiveNumber(env.UPTIME_ROBOT_REFRESH_RUNNING_TIMEOUT_MS, REFRESH_RUNNING_TIMEOUT_MS));
+}
+
+function refreshProgress(offset, total, fetched, pageSize) {
+  return {
+    offset,
+    total: Number.isFinite(total) ? total : null,
+    fetched,
+    pageSize
   };
 }
 
@@ -414,8 +637,20 @@ async function fetchStatus(env, days) {
   const { dates, ranges, start, end } = uptimeRanges(days);
   ranges.push(`${start}_${end}`);
 
-  const baseParams = {
-    api_key: apiKey,
+  const baseParams = statusFetchParams(env, start, end, ranges);
+
+  const monitors = await fetchAllMonitors(
+    baseParams,
+    env,
+    positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS)
+  );
+
+  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
+}
+
+function statusFetchParams(env, start, end, ranges) {
+  return {
+    api_key: env.UPTIME_ROBOT_API,
     format: "json",
     logs: "1",
     log_types: "1-2",
@@ -426,14 +661,6 @@ async function fetchStatus(env, days) {
     custom_uptime_ranges: ranges.join("-"),
     statuses: env.UPTIME_ROBOT_STATUSES || DEFAULT_STATUSES
   };
-
-  const monitors = await fetchAllMonitors(
-    baseParams,
-    env,
-    positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS)
-  );
-
-  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN);
 }
 
 async function fetchAllMonitors(params, env, timeoutMs) {

@@ -74,6 +74,9 @@ npx pnpm@8.15.8 run dev
 | `STATUS_PAGE_MAX_DAYS` | 否 | `/api/status?days=` 最大允许天数，默认 `90`，用于避免异常大查询拖慢接口 |
 | `UPTIME_ROBOT_TIMEOUT_MS` | 否 | 后端单次请求 UptimeRobot 的超时时间，默认 `30000` |
 | `UPTIME_ROBOT_PAGE_SIZE` | 否 | 后端分页拉取 UptimeRobot 监控的每页数量，默认 `25`，最大 `50` |
+| `UPTIME_ROBOT_REFRESH_BUDGET_MS` | 否 | Cloudflare Pages 单次后台刷新最多执行时间，默认 `18000`，未完成会保存进度等待下次继续 |
+| `UPTIME_ROBOT_REFRESH_RUNNING_TIMEOUT_MS` | 否 | Cloudflare Pages 刷新状态最长可保持 running 的时间，默认 `600000` |
+| `UPTIME_ROBOT_REFRESH_CONTINUE_INTERVAL_MS` | 否 | `/api/status` 触发后台续跑的最小间隔，默认 `15000` |
 | `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
 | `VITE_API_TIMEOUT_MS` | 否 | 浏览器端 API 请求超时时间，默认 `15000` |
 | `PORT` | 否 | Koa 监听端口 |
@@ -112,12 +115,18 @@ GET /api/status?days=90
 GET /api/refresh?days=90&token=your-token
 ```
 
-该接口默认立即返回 `202 Accepted`，刷新任务在后台执行，适合 UptimeRobot、Vercel Cron、Cloudflare Pages、GitHub Actions 等定时器调用。刷新过程中后端会按页拉取 UptimeRobot 监控，避免一次性大响应导致超时。
+该接口默认立即返回 `202 Accepted`，刷新任务在后台执行，适合 UptimeRobot、Vercel Cron、Cloudflare Pages、GitHub Actions 等定时器调用。刷新过程中后端会按页拉取 UptimeRobot 监控，避免一次性大响应导致超时。Cloudflare Pages 会把进度写入 KV，单次执行未完成时，下次 `/api/refresh` 或页面轮询 `/api/status` 会继续处理剩余分页。
 
 如果需要在本地或常驻 Koa 服务里同步等待刷新结果，可加 `wait=1`。Cloudflare Pages 不建议使用同步等待，监控数量多时应直接调用默认异步接口，稍后再访问 `/api/status` 确认快照是否生成。同步模式只返回刷新摘要，不返回完整状态数据：
 
 ```http
 GET /api/refresh?wait=1&token=your-token
+```
+
+如果 Cloudflare Pages 的刷新状态长时间卡住，可用 `force=1` 丢弃旧进度并重新开始：
+
+```http
+GET /api/refresh?force=1&token=your-token
 ```
 
 ### `GET /api/refresh-status`
@@ -128,7 +137,7 @@ GET /api/refresh?wait=1&token=your-token
 GET /api/refresh-status?days=90&token=your-token
 ```
 
-返回中的 `diagnostics.kvBound` 应为 `true`，`diagnostics.hasUptimeRobotApiKey` 应为 `true`。Cloudflare KV 中会先写入 `refresh:90` 记录刷新状态；只有完整快照成功生成后，才会写入 `status:90`。如果调用 `/api/refresh` 后 KV 仍完全为空，优先检查 Pages 项目的 KV 绑定是否在生产环境生效，并确认已经重新部署。
+返回中的 `diagnostics.kvBound` 应为 `true`，`diagnostics.hasUptimeRobotApiKey` 应为 `true`。Cloudflare KV 中会先写入 `refresh:90` 记录刷新状态；批处理未完成时还会暂存 `refresh-data:90`；只有完整快照成功生成后，才会写入 `status:90`。如果调用 `/api/refresh` 后 KV 仍完全为空，优先检查 Pages 项目的 KV 绑定是否在生产环境生效，并确认已经重新部署。
 
 ### `GET /api/info`
 
