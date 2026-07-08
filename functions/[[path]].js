@@ -3,6 +3,8 @@ const DEFAULT_STATUSES = "2-9";
 const CACHE_TTL_MS = 60 * 1000;
 const CACHE_STALE_TTL_MS = 0;
 const RESPONSE_TIMES_LIMIT = 48;
+const RESPONSE_TIMES_WINDOW_HOURS = 24;
+const RESPONSE_TIMES_AVERAGE = 30;
 const UPTIME_ROBOT_TIMEOUT_MS = 30 * 1000;
 const UPTIME_ROBOT_PAGE_SIZE = 25;
 const REFRESH_BUDGET_MS = 18 * 1000;
@@ -253,17 +255,20 @@ async function continueRefreshStatusCache(context, env, days, cacheKey, options 
   if (!refreshData || !Array.isArray(refreshData.monitors)) {
     refreshData = {
       monitors: [],
-      startedAt
+      startedAt,
+      responseTimes: responseTimesWindow(env)
     };
     offset = 0;
     total = null;
     await writeRefreshData(env, days, refreshData);
+  } else if (!refreshData.responseTimes) {
+    refreshData.responseTimes = responseTimesWindow(env);
   }
 
   const timeZone = runtimeTimeZone(env);
   const { dates, ranges, start, end } = uptimeRanges(days, timeZone);
   ranges.push(`${start}_${end}`);
-  const baseParams = statusFetchParams(env, start, end, ranges);
+  const baseParams = statusFetchParams(env, start, end, ranges, refreshData.responseTimes);
   const timeoutMs = positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS);
   const budgetMs = Math.max(1000, positiveNumber(env.UPTIME_ROBOT_REFRESH_BUDGET_MS, REFRESH_BUDGET_MS));
   const deadline = Date.now() + budgetMs;
@@ -319,6 +324,7 @@ async function continueRefreshStatusCache(context, env, days, cacheKey, options 
 
     if (isComplete) {
       const data = transformMonitors(refreshData.monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN, timeZone);
+      data.meta.responseTimes = refreshData.responseTimes;
       const refreshedAt = Date.now();
       const entry = {
         key: cacheKey,
@@ -640,8 +646,9 @@ async function fetchStatus(env, days) {
   const timeZone = runtimeTimeZone(env);
   const { dates, ranges, start, end } = uptimeRanges(days, timeZone);
   ranges.push(`${start}_${end}`);
+  const responseTimes = responseTimesWindow(env);
 
-  const baseParams = statusFetchParams(env, start, end, ranges);
+  const baseParams = statusFetchParams(env, start, end, ranges, responseTimes);
 
   const monitors = await fetchAllMonitors(
     baseParams,
@@ -649,21 +656,43 @@ async function fetchStatus(env, days) {
     positiveNumber(env.UPTIME_ROBOT_TIMEOUT_MS, UPTIME_ROBOT_TIMEOUT_MS)
   );
 
-  return transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN, runtimeTimeZone(env));
+  const data = transformMonitors(monitors, dates, env.UPTIME_ROBOT_NAME_PATTERN, timeZone);
+  data.meta.responseTimes = responseTimes;
+  return data;
 }
 
-function statusFetchParams(env, start, end, ranges) {
+function statusFetchParams(env, start, end, ranges, responseTimes) {
   return {
     api_key: env.UPTIME_ROBOT_API,
     format: "json",
     logs: "1",
     log_types: "1-2",
     response_times: "1",
-    response_times_limit: String(env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || RESPONSE_TIMES_LIMIT),
+    response_times_limit: String(responseTimes.limit),
+    response_times_average: String(responseTimes.average),
+    response_times_start_date: String(responseTimes.start),
+    response_times_end_date: String(responseTimes.end),
     logs_start_date: String(start),
     logs_end_date: String(end),
     custom_uptime_ranges: ranges.join("-"),
     statuses: env.UPTIME_ROBOT_STATUSES || DEFAULT_STATUSES
+  };
+}
+
+function responseTimesWindow(env) {
+  const hours = Math.min(168, Math.max(1, positiveNumber(env.UPTIME_ROBOT_RESPONSE_TIMES_HOURS, RESPONSE_TIMES_WINDOW_HOURS)));
+  const average = Math.max(0, positiveNumber(env.UPTIME_ROBOT_RESPONSE_TIMES_AVERAGE, RESPONSE_TIMES_AVERAGE));
+  const fallbackLimit = average > 0 ? Math.ceil((hours * 60) / average) + 2 : RESPONSE_TIMES_LIMIT;
+  const limit = Math.max(1, Math.ceil(positiveNumber(env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT, fallbackLimit)));
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - Math.floor(hours * 60 * 60);
+
+  return {
+    start,
+    end,
+    hours,
+    average,
+    limit
   };
 }
 

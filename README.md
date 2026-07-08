@@ -78,7 +78,9 @@ npx pnpm@8.15.8 run dev
 | `UPTIME_ROBOT_REFRESH_BUDGET_MS` | 否 | Cloudflare Pages 单次后台刷新最多执行时间，默认 `18000`，未完成会保存进度等待下次继续 |
 | `UPTIME_ROBOT_REFRESH_RUNNING_TIMEOUT_MS` | 否 | Cloudflare Pages 刷新状态最长可保持 running 的时间，默认 `600000` |
 | `UPTIME_ROBOT_REFRESH_CONTINUE_INTERVAL_MS` | 否 | `/api/status` 触发后台续跑的最小间隔，默认 `15000` |
-| `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
+| `UPTIME_ROBOT_RESPONSE_TIMES_HOURS` | 否 | 响应时间曲线窗口，默认最近 `24` 小时，最大 `168` 小时 |
+| `UPTIME_ROBOT_RESPONSE_TIMES_AVERAGE` | 否 | 响应时间曲线聚合粒度，单位分钟，默认 `30`；设为 `0` 表示不聚合 |
+| `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量；默认按窗口和聚合粒度自动计算 |
 | `VITE_API_TIMEOUT_MS` | 否 | 浏览器端 API 请求超时时间，默认 `15000` |
 | `PORT` | 否 | Koa 监听端口 |
 | `LOG_LEVEL` | 否 | 日志级别 |

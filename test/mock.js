@@ -134,6 +134,24 @@ export function mockTimeoutThenPaginatedSucc() {
     });
 }
 
+export function mockResponseTimesWindowSucc() {
+  return nock("https://api.uptimerobot.com")
+    .post("/v2/getMonitors", body => {
+      const start = Number(bodyParam(body, "response_times_start_date"));
+      const end = Number(bodyParam(body, "response_times_end_date"));
+
+      return (
+        bodyParam(body, "response_times") === "1" &&
+        bodyParam(body, "response_times_average") === "30" &&
+        bodyParam(body, "response_times_limit") === "50" &&
+        Number.isFinite(start) &&
+        Number.isFinite(end) &&
+        end - start === 24 * 60 * 60
+      );
+    })
+    .reply(200, successResponse);
+}
+
 export function mockFail() {
   return nock("https://api.uptimerobot.com")
     .persist()
@@ -142,13 +160,13 @@ export function mockFail() {
 }
 
 function hasParams(body, expected) {
-  const get = key => {
-    if (typeof body === "string") {
-      return new URLSearchParams(body).get(key);
-    }
+  return Object.entries(expected).every(([key, value]) => String(bodyParam(body, key)) === value);
+}
 
-    return body && body[key];
-  };
+function bodyParam(body, key) {
+  if (typeof body === "string") {
+    return new URLSearchParams(body).get(key);
+  }
 
-  return Object.entries(expected).every(([key, value]) => String(get(key)) === value);
+  return body && body[key];
 }

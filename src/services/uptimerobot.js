@@ -14,11 +14,19 @@ const statusPageMaxDays = positiveNumber(process.env.STATUS_PAGE_MAX_DAYS, statu
 const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 30 * 1000);
 const uptimeRobotPageSize = Math.min(50, Math.max(1, positiveNumber(process.env.UPTIME_ROBOT_PAGE_SIZE, 25)));
 const statusPageTimeZone = normalizeTimeZone(process.env.TIME_ZONE || process.env.TZ || "Asia/Shanghai");
+const responseTimesWindowHours = Math.min(
+  168,
+  Math.max(1, positiveNumber(process.env.UPTIME_ROBOT_RESPONSE_TIMES_HOURS, 24))
+);
+const responseTimesAverage = Math.max(0, positiveNumber(process.env.UPTIME_ROBOT_RESPONSE_TIMES_AVERAGE, 30));
+const responseTimesLimit = Math.max(
+  1,
+  Math.ceil(positiveNumber(process.env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT, defaultResponseTimesLimit()))
+);
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
   process.env.CACHE_DIR || (process.env.VERCEL ? "/tmp/status-page-cache" : join(process.cwd(), ".cache"));
-const responseTimesLimit = Number(process.env.UPTIME_ROBOT_RESPONSE_TIMES_LIMIT || 48);
 
 function lastDays(distance) {
   const now = zonedStartOfToday(statusPageTimeZone);
@@ -163,19 +171,23 @@ export default class UptimeRobotService {
   async prefetchStatusPage(days = statusPageDistance) {
     days = normalizeDays(days);
     const { dates, ranges, start, end } = this.statusPageRanges(days);
+    const responseTimes = responseTimesRange();
 
     const monitors = await this.fetchAllMonitors({
       logs: 1,
       log_types: "1-2",
       response_times: 1,
       response_times_limit: responseTimesLimit,
+      response_times_average: responseTimes.average,
+      response_times_start_date: responseTimes.start,
+      response_times_end_date: responseTimes.end,
       logs_start_date: start,
       logs_end_date: end,
       custom_uptime_ranges: ranges.join("-"),
       statuses: require("config").get("uptimerobot.statuses")
     });
 
-    return this.putStatusPageCache(days, this.buildStatusPageData(monitors, dates));
+    return this.putStatusPageCache(days, this.buildStatusPageData(monitors, dates, { responseTimes }));
   }
 
   async fetchAllMonitors(params = {}) {
@@ -240,13 +252,14 @@ export default class UptimeRobotService {
     return { dates, ranges, start, end };
   }
 
-  buildStatusPageData(monitors, dates) {
+  buildStatusPageData(monitors, dates, meta = {}) {
     const data = {
       monitors: {},
       logs: [],
       meta: {
         partial: false,
-        generatedAt: new Date().toISOString()
+        generatedAt: new Date().toISOString(),
+        ...meta
       }
     };
 
@@ -562,6 +575,27 @@ function isTimeoutError(err) {
 
 function safeErrorMessage(err) {
   return err && err.message ? err.message : String(err || "Unknown refresh error.");
+}
+
+function defaultResponseTimesLimit() {
+  if (responseTimesAverage > 0) {
+    return Math.ceil((responseTimesWindowHours * 60) / responseTimesAverage) + 2;
+  }
+
+  return 288;
+}
+
+function responseTimesRange() {
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - Math.floor(responseTimesWindowHours * 60 * 60);
+
+  return {
+    start,
+    end,
+    hours: responseTimesWindowHours,
+    average: responseTimesAverage,
+    limit: responseTimesLimit
+  };
 }
 
 function normalizeTimeZone(value) {

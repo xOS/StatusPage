@@ -1,7 +1,7 @@
 import test from "ava";
 import superkoa from "superkoa";
 import nock from "nock";
-import { mockFail, mockPaginatedSucc, mockSucc, mockTimeoutThenPaginatedSucc } from "./mock";
+import { mockFail, mockPaginatedSucc, mockResponseTimesWindowSucc, mockSucc, mockTimeoutThenPaginatedSucc } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
 import { normalizeDays } from "../src/services/uptimerobot";
 
@@ -101,6 +101,18 @@ test.serial("GET /api/refresh fetches all UptimeRobot pages", async t => {
   t.is(res.status, 200);
   t.true(scope.isDone());
   t.is(res.body.groups, 3);
+  t.is(res.body.monitors, 5);
+});
+
+test.serial("GET /api/refresh requests an explicit 24-hour response time window", async t => {
+  const scope = mockResponseTimesWindowSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh?wait=1&token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 200);
+  t.true(scope.isDone());
   t.is(res.body.monitors, 5);
 });
 
