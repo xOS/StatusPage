@@ -20,8 +20,7 @@
 ├── functions/[[path]].js     # Cloudflare Pages Function
 ├── frontend/                 # Vue/Vite 前端
 ├── src/                      # Koa 后端、UptimeRobot 服务、旧 Pug 页面
-├── vercel.json               # Vercel 部署配置
-└── wrangler.toml             # Cloudflare Pages 部署配置
+└── vercel.json               # Vercel 部署配置
 ```
 
 ## 环境要求
@@ -210,9 +209,8 @@ Vercel 会托管 `frontend/dist`，并通过 Serverless Function 动态提供 `/
 
 ## Cloudflare Pages 部署
 
-项目已内置 Cloudflare Pages 配置：
+Cloudflare Pages 建议在控制台配置项目，不提交 `wrangler.toml`。这样 KV 绑定、环境变量和 Secret 都由 Cloudflare 控制台管理，不会把 KV namespace ID 写进仓库。
 
-* 配置文件：`wrangler.toml`
 * 构建命令：`npm run build:cloudflare`
 * 输出目录：`frontend/dist`
 * 动态入口：`functions/[[path]].js`
@@ -232,7 +230,24 @@ WEBSITE_FOOTER_OWNER=楠格
 
 Cloudflare Pages 会托管 `frontend/dist`，并通过 Pages Function 动态提供 `/api/status`。项目不再使用从旧前端带来的 Worker/KV/backup 接口。
 
-为了让 Cloudflare Pages 在换浏览器、换边缘实例时也能秒回，建议创建 Workers KV namespace，并在 Pages 项目中绑定变量名 `STATUS_CACHE`。`functions/[[path]].js` 会优先读取 KV 中最后一次成功生成的快照；如果没有 KV，会退回到当前边缘实例内存和 Cache API。
+为了让 Cloudflare Pages 在换浏览器、换边缘实例时也能秒回，建议创建 Workers KV namespace，并在 Pages Functions 中绑定变量名 `STATUS_CACHE`。`functions/[[path]].js` 会优先读取 KV 中最后一次成功生成的快照；如果没有 KV，会退回到当前边缘实例内存和 Cache API。
+
+KV namespace 的名称可以自定义，例如 `status-page-cache`。真正必须固定的是 Pages Functions 的绑定变量名：
+
+```text
+Variable name: STATUS_CACHE
+KV namespace: status-page-cache
+```
+
+KV 里的键值不需要手动创建。首次成功调用 `/api/refresh` 后，后端会自动写入类似 `status:90` 的键；如果你请求了其他天数，例如 `/api/status?days=30`，对应快照键就是 `status:30`。
+
+配置步骤：
+
+1. 打开 `Workers & Pages` -> `KV`，创建 namespace，例如 `status-page-cache`。
+2. 进入 Pages 项目：`Settings` -> `Bindings` -> `Add` -> `KV namespace`。
+3. `Variable name` 填 `STATUS_CACHE`，`KV namespace` 选择刚创建的 namespace。
+4. 保存后重新部署 Cloudflare Pages。
+5. 部署完成后调用一次 `/api/refresh?wait=1&token=your-token`，成功后 KV 会自动写入 `status:90`。
 
 Cloudflare Pages 没有本项目 Koa 进程那样的常驻 cron。需要提前刷新时，可用 Cloudflare Worker Cron、UptimeRobot、GitHub Actions 或其他外部定时器请求：
 
