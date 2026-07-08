@@ -2,12 +2,20 @@
 	<div class="grid grid-cols-12 max-w-6xl gap-4 px-2 md:mx-auto -mt-8">
 		<div class="col-span-12">
 			<n-alert
-				v-if="uptime_error"
+				v-if="uptime_error && !uptime_data"
 				title="错误！"
 				class="rounded-lg shadow"
 				type="error"
 			>
 				{{ uptime_error?.message }}
+			</n-alert>
+			<n-alert
+				v-if="syncWarning"
+				title="数据同步中"
+				class="rounded-lg shadow"
+				type="warning"
+			>
+				{{ syncWarning }}
 			</n-alert>
 			<n-alert
 				v-if="showLoading"
@@ -154,6 +162,10 @@ const showAllLogs = ref(false)
 
 const monitors = computed(() => uptime_data.value?.monitors || {})
 const showContent = computed(() => !uptime_loading.value || !!uptime_data.value)
+const syncWarning = computed(() => {
+	if (!uptime_data.value?.meta?.partial) return ''
+	return '完整历史数据仍在后台同步，当前先显示轻量状态快照。'
+})
 
 const allok = computed(() => {
 	let ok = true

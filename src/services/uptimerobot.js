@@ -13,6 +13,8 @@ const statusPageStaleTTL = positiveNumber(process.env.CACHE_STALE_TTL_MS, 0);
 const statusPageDiskTTL = positiveNumber(process.env.CACHE_DISK_TTL_MS, statusPageStaleTTL);
 const statusPageMaxDays = positiveNumber(process.env.STATUS_PAGE_MAX_DAYS, statusPageDistance);
 const uptimeRobotTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_TIMEOUT_MS, 12 * 1000);
+const uptimeRobotFastTimeoutMs = positiveNumber(process.env.UPTIME_ROBOT_FAST_TIMEOUT_MS, 5 * 1000);
+const statusPageColdWaitMs = positiveNumber(process.env.STATUS_PAGE_COLD_WAIT_MS, 2500);
 const statusPageDiskCacheEnabled =
   process.env.CACHE_DISK === "false" ? false : process.env.NODE_ENV !== "test";
 const statusPageCacheDir =
@@ -160,6 +162,41 @@ export default class UptimeRobotService {
 
   async prefetchStatusPage(days = statusPageDistance) {
     days = normalizeDays(days);
+    const { dates, ranges, start, end } = this.statusPageRanges(days);
+
+    const { monitors } = await this.api.getMonitors({
+      logs: 1,
+      log_types: "1-2",
+      response_times: 1,
+      response_times_limit: responseTimesLimit,
+      logs_start_date: start,
+      logs_end_date: end,
+      custom_uptime_ranges: ranges.join("-"),
+      statuses: require("config").get("uptimerobot.statuses")
+    });
+
+    return this.putStatusPageCache(days, this.buildStatusPageData(monitors, dates));
+  }
+
+  async prefetchFastStatusPage(days = statusPageDistance, sourceError) {
+    days = normalizeDays(days);
+    const { dates } = this.statusPageRanges(days);
+    const { monitors } = await this.getMonitorsFast({
+      custom_uptime_ratios: days,
+      statuses: require("config").get("uptimerobot.statuses")
+    });
+
+    return this.putStatusPageCache(
+      days,
+      this.buildStatusPageData(monitors, dates, {
+        partial: true,
+        error: sourceError
+      }),
+      { ttlMs: 0 }
+    );
+  }
+
+  statusPageRanges(days) {
     const today = startOfDay(new Date());
     const dates = [];
 
@@ -177,25 +214,56 @@ export default class UptimeRobotService {
 
     ranges.push(`${start}_${end}`);
 
-    const { monitors } = await this.api.getMonitors({
-      logs: 1,
-      log_types: "1-2",
-      response_times: 1,
-      response_times_limit: responseTimesLimit,
-      logs_start_date: start,
-      logs_end_date: end,
-      custom_uptime_ranges: ranges.join("-"),
-      statuses: require("config").get("uptimerobot.statuses")
-    });
+    return { dates, ranges, start, end };
+  }
 
+  async getMonitorsFast(options) {
+    const client = this.api.__client;
+    if (!client || !client.axios || !client.requestBaseData) {
+      return this.api.getMonitors(options);
+    }
+
+    const response = await client.axios.post(
+      "getMonitors",
+      new URLSearchParams({
+        ...options,
+        ...client.requestBaseData
+      }).toString(),
+      { timeout: uptimeRobotFastTimeoutMs }
+    );
+    const data = response.data;
+
+    if (data.stat === "ok") {
+      return data;
+    }
+
+    throw data;
+  }
+
+  buildStatusPageData(monitors, dates, options = {}) {
     const data = {
       monitors: {},
       logs: []
     };
+    if (options.partial || options.error) {
+      data.meta = {
+        partial: true,
+        generatedAt: new Date().toISOString(),
+        error: errorMessage(options.error)
+      };
+    }
 
     for (const monitor of monitors) {
-      const ranges = String(monitor["custom_uptime_ranges"] || "").split("-");
-      const average = formatNumber(ranges.pop());
+      const uptimeRanges = String(monitor["custom_uptime_ranges"] || "").split("-");
+      const average = options.partial
+        ? formatNumber(
+            monitor["custom_uptime_ratio"] !== undefined
+              ? monitor["custom_uptime_ratio"]
+              : monitor.status === 2
+                ? 100
+                : 0
+          )
+        : formatNumber(uptimeRanges.pop());
       const parsed = parseOptions(monitor["friendly_name"]);
       const parsedName = this.parseMonitorName(parsed.name);
       const dailyMap = {};
@@ -203,7 +271,7 @@ export default class UptimeRobotService {
         dailyMap[format(date, "yyyyMMdd")] = index;
         return {
           date: format(date, "yyyy-MM-dd"),
-          uptime: formatNumber(ranges[index]),
+          uptime: options.partial ? average : formatNumber(uptimeRanges[index]),
           down: {
             times: 0,
             duration: 0
@@ -216,7 +284,7 @@ export default class UptimeRobotService {
         duration: 0
       };
 
-      for (const log of monitor.logs || []) {
+      for (const log of options.partial ? [] : monitor.logs || []) {
         if (log.type !== 1) continue;
 
         const dateKey = format(fromUnixTime(log.datetime), "yyyyMMdd");
@@ -261,7 +329,19 @@ export default class UptimeRobotService {
 
     data.logs.sort((a, b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime());
 
-    return this.putStatusPageCache(days, data);
+    return data;
+  }
+
+  emptyStatusPageData(error, sourceError) {
+    return {
+      monitors: {},
+      logs: [],
+      meta: {
+        partial: true,
+        generatedAt: new Date().toISOString(),
+        error: errorMessage(error || sourceError)
+      }
+    };
   }
 
   async list() {
@@ -274,12 +354,27 @@ export default class UptimeRobotService {
     return data;
   }
 
-  async statusPage(days = statusPageDistance) {
+  async statusPage(days = statusPageDistance, options = {}) {
     days = normalizeDays(days);
     const cached = this.getStatusPageCache(days);
 
     if (!cached) {
-      return await this.refreshStatusPageCache(days);
+      const refresh = this.refreshStatusPageCache(days);
+      try {
+        return await waitFor(refresh, positiveNumber(options.coldWaitMs, statusPageColdWaitMs));
+      } catch (err) {
+        logger.warn("Full status page refresh did not finish before fallback.", errorMessage(err));
+        refresh.catch(refreshErr => {
+          logger.error(refreshErr);
+        });
+
+        try {
+          return await this.prefetchFastStatusPage(days, err);
+        } catch (fallbackErr) {
+          logger.warn("Fast status page fallback failed.", errorMessage(fallbackErr));
+          return this.putStatusPageCache(days, this.emptyStatusPageData(fallbackErr, err), { ttlMs: 0 });
+        }
+      }
     }
 
     if (cached.expiresAt > Date.now()) {
@@ -316,12 +411,13 @@ export default class UptimeRobotService {
     return diskCached;
   }
 
-  putStatusPageCache(days, data) {
+  putStatusPageCache(days, data, options = {}) {
     days = normalizeDays(days);
     const now = Date.now();
+    const ttlMs = positiveNumber(options.ttlMs, statusPageCacheTTL);
     const entry = {
       data,
-      expiresAt: now + statusPageCacheTTL,
+      expiresAt: now + ttlMs,
       savedAt: now
     };
 
@@ -427,4 +523,28 @@ export function normalizeDays(value) {
 function positiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function waitFor(promise, timeoutMs) {
+  if (timeoutMs <= 0) {
+    return Promise.reject(new Error("Status page refresh skipped initial wait."));
+  }
+
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`Status page refresh did not finish within ${timeoutMs}ms.`));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeout);
+  });
+}
+
+function errorMessage(error) {
+  if (!error) return undefined;
+  if (error.message) return error.message;
+  if (error.error && error.error.message) return error.error.message;
+  return String(error);
 }

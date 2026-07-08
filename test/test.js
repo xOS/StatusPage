@@ -60,6 +60,18 @@ test.serial("GET /api/status returns stale snapshot before background refresh", 
   fail.persist(false);
 });
 
+test.serial("statusPage returns fast snapshot when full refresh is slow", async t => {
+  const slow = mockSucc({ delay: 30 });
+  const fast = mockSucc();
+  const data = await t.context.app.context.services.uptimerobot.statusPage(87, { coldWaitMs: 1 });
+
+  t.true(data.meta.partial);
+  t.truthy(data.monitors.Web);
+  t.is(data.logs.length, 0);
+  slow.persist(false);
+  fast.persist(false);
+});
+
 test.serial("GET /api/refresh requires token", async t => {
   const res = await superkoa(t.context.app).get("/api/refresh");
   t.is(res.status, 401);
@@ -108,7 +120,9 @@ test.serial("GET /api/info", async t => {
 test.serial("GET /api/status with error", async t => {
   const scope = mockFail();
   const res = await superkoa(t.context.app).get("/api/status?days=89");
-  t.is(res.status, 500);
+  t.is(res.status, 200);
+  t.true(res.body.meta.partial);
+  t.deepEqual(res.body.monitors, {});
   scope.persist(false);
 });
 

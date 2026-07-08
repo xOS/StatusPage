@@ -37,6 +37,11 @@ export interface _Resp {
 			detail: string
 		}
 	}>
+	meta?: {
+		partial?: boolean
+		generatedAt?: string
+		error?: string
+	}
 }
 export const uptimeRequest = (apikey: string, days: number) => {
 	const cacheKey = statusCacheKey(days)
@@ -45,12 +50,35 @@ export const uptimeRequest = (apikey: string, days: number) => {
 		data: rawData,
 		loading,
 		error,
+		refresh,
 	} = useRequest<_Resp>(() => http.get('/api/status', { params: { days } }))
+	let partialRefreshTimer: ReturnType<typeof setTimeout> | undefined
+	let partialRefreshCount = 0
+
 	watch(rawData, (value) => {
 		if (!value) return
 
 		cachedData.value = value
 		writeCachedStatus(cacheKey, value)
+
+		if (!value.meta?.partial) {
+			partialRefreshCount = 0
+			return
+		}
+
+		if (partialRefreshCount >= 3) return
+		if (partialRefreshTimer) {
+			clearTimeout(partialRefreshTimer)
+		}
+		partialRefreshTimer = setTimeout(() => {
+			partialRefreshCount++
+			refresh()
+		}, 10000)
+	})
+	onBeforeUnmount(() => {
+		if (partialRefreshTimer) {
+			clearTimeout(partialRefreshTimer)
+		}
 	})
 	const data = computed(() => {
 		const source = rawData.value || cachedData.value

@@ -74,7 +74,9 @@ npx pnpm@8.15.8 run dev
 | `CACHE_REFRESH_TOKEN` | 否 | 手动预热 `/api/refresh` 的访问令牌；也兼容 `CRON_SECRET` / `REFRESH_TOKEN` |
 | `STATUS_PAGE_MAX_DAYS` | 否 | `/api/status?days=` 最大允许天数，默认 `90`，用于避免异常大查询拖慢接口 |
 | `UPTIME_ROBOT_TIMEOUT_MS` | 否 | 后端请求 UptimeRobot 的超时时间，默认 `12000` |
+| `UPTIME_ROBOT_FAST_TIMEOUT_MS` | 否 | 冷启动轻量快照请求超时时间，默认 `5000` |
 | `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT` | 否 | 每个节点响应时间采样点数量，默认 `48` |
+| `STATUS_PAGE_COLD_WAIT_MS` | 否 | 无缓存时同步等待完整 90 天快照的时间，默认 `2500`，超时后先返回轻量快照 |
 | `VITE_API_TIMEOUT_MS` | 否 | 浏览器端 API 请求超时时间，默认 `15000` |
 | `PORT` | 否 | Koa 监听端口 |
 | `LOG_LEVEL` | 否 | 日志级别 |
@@ -238,7 +240,7 @@ Cloudflare Pages 没有本项目 Koa 进程那样的常驻 cron。需要提前�
 GET https://你的域名/api/refresh?token=your-token
 ```
 
-为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 只在完全没有任何历史快照时等待官方 API，并受 `UPTIME_ROBOT_TIMEOUT_MS` 控制。只要后端曾成功拿到过一次数据，之后刷新页面、换浏览器或缓存超过 `CACHE_TTL_MS` 都会先返回旧快照，并后台刷新。Koa 常驻部署还会把新版状态数据写入磁盘缓存，进程重启后可先返回上次缓存。新版前端也会保存最近一次成功加载的状态快照，网络超时或后端冷启动时可以先显示旧数据。首次全新部署没有历史缓存时仍需要等待 UptimeRobot 返回数据或超时；监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT`、设置 `STATUS_PAGE_MAX_DAYS` 或缩短前端请求的 `days` 参数。
+为了避免 UptimeRobot 慢请求阻塞页面，`/api/status` 在完全没有历史快照时只同步等待完整 90 天快照 `STATUS_PAGE_COLD_WAIT_MS`，默认 2.5 秒；如果完整请求还没返回，会先发起轻量请求生成当前状态快照并立即返回，完整 90 天数据继续在后台刷新。只要后端曾成功拿到过一次数据，之后刷新页面、换浏览器或缓存超过 `CACHE_TTL_MS` 都会先返回旧快照，并后台刷新。Koa 常驻部署还会把新版状态数据写入磁盘缓存，进程重启后可先返回上次缓存。新版前端也会保存最近一次成功加载的状态快照，网络超时或后端冷启动时可以先显示旧数据。监控数量很多时可降低 `UPTIME_ROBOT_RESPONSE_TIMES_LIMIT`、设置 `STATUS_PAGE_MAX_DAYS` 或缩短前端请求的 `days` 参数。
 
 ## Docker 部署
 
