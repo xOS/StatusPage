@@ -8,6 +8,7 @@ const UPTIME_ROBOT_PAGE_SIZE = 25;
 const PROJECT_URL = "https://github.com/xOS/StatusPage";
 
 const memoryCache = new Map();
+const refreshStateCache = new Map();
 const refreshes = new Map();
 
 export async function onRequest(context) {
@@ -26,7 +27,12 @@ export async function onRequest(context) {
         return json(cached.data, statusCacheHeaders(cached, now));
       }
 
-      return json(warmingStatus(days), { "cache-control": "no-store", "x-status-cache": "MISS" }, 202);
+      const refreshState = await readRefreshState(env, days);
+      return json(
+        warmingStatus(days, refreshState, runtimeDiagnostics(env)),
+        { "cache-control": "no-store", "x-status-cache": "MISS" },
+        202
+      );
     }
 
     if (url.pathname === "/api/refresh") {
@@ -40,13 +46,40 @@ export async function onRequest(context) {
         return json(refreshSummary(refreshed.data, days), { "cache-control": "no-store" });
       }
 
-      context.waitUntil(refreshStatusCache(context, env, days, `status:${days}`).catch(() => {}));
+      const cacheKey = `status:${days}`;
+      const alreadyRunning = refreshes.has(cacheKey);
+      const refreshStateStorage = alreadyRunning
+        ? null
+        : await writeRefreshState(env, days, {
+            status: "queued",
+            queuedAt: new Date().toISOString(),
+            diagnostics: runtimeDiagnostics(env)
+          });
+
+      context.waitUntil(refreshStatusCache(context, env, days, cacheKey).catch(() => {}));
       return json({
         ok: true,
         accepted: true,
+        alreadyRunning,
         days,
-        savedAt: Date.now()
+        savedAt: Date.now(),
+        refreshStateStorage,
+        diagnostics: runtimeDiagnostics(env)
       }, { "cache-control": "no-store" }, 202);
+    }
+
+    if (url.pathname === "/api/refresh-status") {
+      if (!isRefreshAuthorized(request, env, false)) {
+        return json({ message: "Unauthorized refresh status." }, { "cache-control": "no-store" }, 401);
+      }
+
+      const days = normalizeDays(url.searchParams.get("days"), env);
+      return json({
+        ok: true,
+        days,
+        refresh: await readRefreshState(env, days),
+        diagnostics: runtimeDiagnostics(env)
+      }, { "cache-control": "no-store" });
     }
 
     if (url.pathname === "/api/info") {
@@ -79,7 +112,9 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
-function warmingStatus(days) {
+function warmingStatus(days, refreshState = null, diagnostics = {}) {
+  const message = warmingMessage(refreshState, diagnostics);
+
   return {
     monitors: {},
     logs: [],
@@ -88,9 +123,27 @@ function warmingStatus(days) {
       warming: true,
       days,
       generatedAt: new Date().toISOString(),
-      message: "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh."
+      message,
+      refresh: refreshState,
+      diagnostics
     }
   };
+}
+
+function warmingMessage(refreshState, diagnostics) {
+  if (!diagnostics.kvBound) {
+    return "Cloudflare KV binding STATUS_CACHE is not available. Configure the KV namespace binding in Pages Settings, then redeploy.";
+  }
+  if (!diagnostics.hasUptimeRobotApiKey) {
+    return "UPTIME_ROBOT_API is not configured. Add it to Cloudflare Pages environment variables, then redeploy.";
+  }
+  if (refreshState && refreshState.status === "failed") {
+    return `Status snapshot refresh failed: ${refreshState.error}`;
+  }
+  if (refreshState && refreshState.status === "running") {
+    return "Status snapshot refresh is still running. Wait a moment, then request /api/status again.";
+  }
+  return "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh.";
 }
 
 function refreshSummary(status, days) {
@@ -133,6 +186,12 @@ async function readStatusCache(context, cacheKey) {
 async function refreshStatusCache(context, env, days, cacheKey) {
   if (refreshes.has(cacheKey)) return refreshes.get(cacheKey);
 
+  await writeRefreshState(env, days, {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    diagnostics: runtimeDiagnostics(env)
+  });
+
   const refresh = fetchStatus(env, days).then(async data => {
     const refreshedAt = Date.now();
     const entry = {
@@ -143,21 +202,43 @@ async function refreshStatusCache(context, env, days, cacheKey) {
     };
 
     memoryCache.set(cacheKey, entry);
-    await writeStatusCache(context, env, cacheKey, entry);
+    const storage = await writeStatusCache(context, env, cacheKey, entry);
+    await writeRefreshState(env, days, {
+      status: "success",
+      finishedAt: new Date().toISOString(),
+      summary: refreshSummary(data, days),
+      storage,
+      diagnostics: runtimeDiagnostics(env)
+    });
     return entry;
-  }).finally(() => {
-    refreshes.delete(cacheKey);
-  });
+  })
+    .catch(async err => {
+      await writeRefreshState(env, days, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        error: safeErrorMessage(err),
+        diagnostics: runtimeDiagnostics(env)
+      });
+      throw err;
+    })
+    .finally(() => {
+      refreshes.delete(cacheKey);
+    });
 
   refreshes.set(cacheKey, refresh);
   return refresh;
 }
 
 async function writeStatusCache(context, env, cacheKey, entry) {
-  await writeKvStatusCache(env, cacheKey, entry);
+  const kv = await writeKvStatusCache(env, cacheKey, entry);
 
   const cache = await edgeCache();
-  if (!cache) return;
+  if (!cache) {
+    return {
+      kv,
+      edgeCache: { ok: false, reason: "Cache API is not available." }
+    };
+  }
 
   const retentionMs = Number(env.CACHE_STALE_TTL_MS || env.CACHE_DISK_TTL_MS || CACHE_STALE_TTL_MS);
   const maxAge = retentionMs > 0 ? Math.ceil(retentionMs / 1000) : 365 * 24 * 60 * 60;
@@ -169,6 +250,10 @@ async function writeStatusCache(context, env, cacheKey, entry) {
   });
 
   context.waitUntil(cache.put(statusCacheRequest(context, cacheKey), response));
+  return {
+    kv,
+    edgeCache: { ok: true }
+  };
 }
 
 function statusCacheRequest(context, cacheKey) {
@@ -199,7 +284,9 @@ async function readKvStatusCache(env, cacheKey) {
 }
 
 async function writeKvStatusCache(env, cacheKey, entry) {
-  if (!env.STATUS_CACHE || typeof env.STATUS_CACHE.put !== "function") return;
+  if (!hasKvBinding(env)) {
+    return { ok: false, reason: "STATUS_CACHE binding is not available." };
+  }
 
   const retentionMs = Number(env.CACHE_STALE_TTL_MS || env.CACHE_DISK_TTL_MS || CACHE_STALE_TTL_MS);
   const expirationTtl = retentionMs > 0 ? Math.ceil(retentionMs / 1000) : undefined;
@@ -207,9 +294,71 @@ async function writeKvStatusCache(env, cacheKey, entry) {
 
   try {
     await env.STATUS_CACHE.put(cacheKey, JSON.stringify(entry), options);
-  } catch {
-    // Keep the edge cache and in-memory cache usable even when KV is not writable.
+    return { ok: true, key: cacheKey };
+  } catch (err) {
+    return { ok: false, reason: safeErrorMessage(err) };
   }
+}
+
+function refreshStateKey(days) {
+  return `refresh:${days}`;
+}
+
+async function readRefreshState(env, days) {
+  const key = refreshStateKey(days);
+  const cached = refreshStateCache.get(key);
+  if (cached) return cached;
+
+  const entry = await readKvJson(env, key);
+  if (entry) {
+    refreshStateCache.set(key, entry);
+    return entry;
+  }
+
+  return null;
+}
+
+async function writeRefreshState(env, days, state) {
+  const key = refreshStateKey(days);
+  const entry = {
+    days,
+    updatedAt: new Date().toISOString(),
+    ...state
+  };
+
+  refreshStateCache.set(key, entry);
+
+  if (!hasKvBinding(env)) return { ok: false, reason: "STATUS_CACHE binding is not available." };
+
+  try {
+    await env.STATUS_CACHE.put(key, JSON.stringify(entry), { expirationTtl: 7 * 24 * 60 * 60 });
+    return { ok: true, key };
+  } catch {
+    return { ok: false, reason: "Failed to write refresh state to KV." };
+  }
+}
+
+async function readKvJson(env, key) {
+  if (!hasKvBinding(env)) return null;
+
+  try {
+    const value = await env.STATUS_CACHE.get(key);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasKvBinding(env) {
+  return !!env.STATUS_CACHE && typeof env.STATUS_CACHE.get === "function" && typeof env.STATUS_CACHE.put === "function";
+}
+
+function runtimeDiagnostics(env) {
+  return {
+    kvBound: hasKvBinding(env),
+    hasUptimeRobotApiKey: !!env.UPTIME_ROBOT_API,
+    hasRefreshToken: !!(env.CACHE_REFRESH_TOKEN || env.CRON_SECRET || env.REFRESH_TOKEN)
+  };
 }
 
 function isRefreshAuthorized(request, env, allowWithoutToken) {
@@ -577,4 +726,8 @@ function pad(value) {
 
 function isTimeoutError(err) {
   return err && /timeout|timed out/i.test(err.message || "");
+}
+
+function safeErrorMessage(err) {
+  return err && err.message ? err.message : String(err || "Unknown refresh error.");
 }

@@ -43,6 +43,18 @@ export interface _Resp {
 		generatedAt?: string
 		error?: string
 		message?: string
+		refresh?: {
+			status?: string
+			error?: string
+			updatedAt?: string
+			startedAt?: string
+			finishedAt?: string
+		} | null
+		diagnostics?: {
+			kvBound?: boolean
+			hasUptimeRobotApiKey?: boolean
+			hasRefreshToken?: boolean
+		}
 	}
 }
 export const uptimeRequest = (apikey: string, days: number) => {

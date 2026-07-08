@@ -1,7 +1,7 @@
 import test from "ava";
 import superkoa from "superkoa";
 import nock from "nock";
-import { mockPaginatedSucc, mockSucc, mockTimeoutThenPaginatedSucc } from "./mock";
+import { mockFail, mockPaginatedSucc, mockSucc, mockTimeoutThenPaginatedSucc } from "./mock";
 import { createAPP } from "../src/bootstrap/app";
 import { normalizeDays } from "../src/services/uptimerobot";
 
@@ -131,6 +131,22 @@ test.serial("GET /api/refresh supports async response", async t => {
   scope.persist(false);
 });
 
+test.serial("GET /api/refresh-status returns last refresh state", async t => {
+  const scope = mockSucc();
+  process.env.CACHE_REFRESH_TOKEN = "test-refresh-token";
+  await superkoa(t.context.app)
+    .get("/api/refresh?wait=1&token=test-refresh-token");
+  const res = await superkoa(t.context.app)
+    .get("/api/refresh-status?token=test-refresh-token");
+  delete process.env.CACHE_REFRESH_TOKEN;
+
+  t.is(res.status, 200);
+  t.true(res.body.ok);
+  t.is(res.body.refresh.status, "success");
+  t.is(res.body.refresh.summary.monitors, 5);
+  scope.persist(false);
+});
+
 test.serial("GET /api/info", async t => {
   const res = await superkoa(t.context.app).get("/api/info");
   t.is(res.status, 200);
@@ -147,6 +163,18 @@ test.serial("GET /api/status without snapshot returns warming response", async t
   t.true(res.body.meta.warming);
   t.false(res.body.meta.partial);
   t.deepEqual(res.body.monitors, {});
+});
+
+test.serial("GET /api/status includes failed refresh state when snapshot is missing", async t => {
+  const scope = mockFail();
+  await t.throwsAsync(t.context.app.context.services.uptimerobot.refreshStatusPageCache(86));
+  const res = await superkoa(t.context.app).get("/api/status?days=86");
+
+  t.is(res.status, 202);
+  t.true(res.body.meta.warming);
+  t.is(res.body.meta.refresh.status, "failed");
+  t.true(res.body.meta.message.includes("Status snapshot refresh failed"));
+  scope.persist(false);
 });
 
 test("normalizes status page days and configures API timeout", t => {

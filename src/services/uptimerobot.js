@@ -66,6 +66,7 @@ export default class UptimeRobotService {
     }
     this.cache = new Cache();
     this.statusPageRefreshes = {};
+    this.statusPageRefreshStates = {};
     const pattern = require("config").get("uptimerobot.pattern");
     this.parser = pattern ? new Parser(pattern) : null;
     this.getStatusPageCache(statusPageDistance);
@@ -329,7 +330,8 @@ export default class UptimeRobotService {
         warming: true,
         days,
         generatedAt: new Date().toISOString(),
-        message: "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh."
+        message: this.statusPageWarmingMessage(days),
+        refresh: this.getStatusPageRefreshState(days)
       }
     };
   }
@@ -421,11 +423,67 @@ export default class UptimeRobotService {
     const key = this.statusPageCacheKey(days);
     if (this.statusPageRefreshes[key]) return this.statusPageRefreshes[key];
 
-    this.statusPageRefreshes[key] = this.prefetchStatusPage(days).finally(() => {
-      delete this.statusPageRefreshes[key];
+    this.setStatusPageRefreshState(days, {
+      status: "running",
+      startedAt: new Date().toISOString()
     });
 
+    this.statusPageRefreshes[key] = this.prefetchStatusPage(days)
+      .then(data => {
+        this.setStatusPageRefreshState(days, {
+          status: "success",
+          finishedAt: new Date().toISOString(),
+          summary: this.statusPageSummary(data, days)
+        });
+        return data;
+      })
+      .catch(err => {
+        this.setStatusPageRefreshState(days, {
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          error: safeErrorMessage(err)
+        });
+        throw err;
+      })
+      .finally(() => {
+        delete this.statusPageRefreshes[key];
+      });
+
     return this.statusPageRefreshes[key];
+  }
+
+  setStatusPageRefreshState(days, state) {
+    days = normalizeDays(days);
+    this.statusPageRefreshStates[days] = {
+      days,
+      updatedAt: new Date().toISOString(),
+      ...state
+    };
+  }
+
+  getStatusPageRefreshState(days) {
+    days = normalizeDays(days);
+    return this.statusPageRefreshStates[days] || null;
+  }
+
+  statusPageWarmingMessage(days) {
+    const state = this.getStatusPageRefreshState(days);
+    if (state && state.status === "failed") {
+      return `Status snapshot refresh failed: ${state.error}`;
+    }
+    if (state && state.status === "running") {
+      return "Status snapshot refresh is still running. Wait a moment, then request /api/status again.";
+    }
+    return "Status snapshot has not been generated yet. Trigger /api/refresh or wait for the scheduled refresh.";
+  }
+
+  statusPageSummary(status, days) {
+    return {
+      days,
+      groups: Object.keys(status.monitors || {}).length,
+      monitors: Object.values(status.monitors || {}).reduce((sum, monitors) => sum + monitors.length, 0),
+      logs: (status.logs || []).length
+    };
   }
 
   readStatusPageDiskCache(days) {
@@ -499,4 +557,8 @@ function positiveNumber(value, fallback) {
 
 function isTimeoutError(err) {
   return err && (err.code === "ECONNABORTED" || /timeout|timed out/i.test(err.message || ""));
+}
+
+function safeErrorMessage(err) {
+  return err && err.message ? err.message : String(err || "Unknown refresh error.");
 }

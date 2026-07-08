@@ -51,6 +51,24 @@ export const Refresh = async ctx => {
   };
 };
 
+export const RefreshStatus = async ctx => {
+  const days = normalizeDays(ctx.query.days || 90);
+  ctx.set("Cache-Control", "no-store");
+
+  if (!isRefreshAuthorized(ctx, false)) {
+    ctx.status = 401;
+    ctx.body = { message: "Unauthorized refresh status." };
+    return;
+  }
+
+  ctx.body = {
+    ok: true,
+    days,
+    refresh: ctx.services.uptimerobot.getStatusPageRefreshState(days),
+    diagnostics: refreshDiagnostics(ctx)
+  };
+};
+
 export const Info = async ctx => {
   const site = normalizeSiteInfo(ctx.config.get("website"));
 
@@ -113,6 +131,13 @@ function refreshSummary(status, days) {
     groups: Object.keys(status.monitors || {}).length,
     monitors: Object.values(status.monitors || {}).reduce((sum, monitors) => sum + monitors.length, 0),
     logs: (status.logs || []).length
+  };
+}
+
+function refreshDiagnostics(ctx) {
+  return {
+    hasUptimeRobotApiKey: !!ctx.config.get("uptimerobot.api_key"),
+    hasRefreshToken: REFRESH_TOKEN_ENV_KEYS.some(key => !!process.env[key])
   };
 }
 

@@ -167,13 +167,13 @@ const statusNotice = computed(() => {
 	if (uptime_data.value?.meta?.warming) {
 		return {
 			title: '快照生成中',
-			message: '后台正在生成完整状态快照，完成后页面会自动显示完整数据。',
+			message: uptime_data.value.meta.message || '后台正在生成完整状态快照，完成后页面会自动显示完整数据。',
 		}
 	}
 	if (uptime_data.value?.meta?.partial) {
 		return {
 			title: '数据同步中',
-			message: '当前数据不是完整快照，等待后台完整快照生成后会自动替换。',
+			message: uptime_data.value.meta.message || '当前数据不是完整快照，等待后台完整快照生成后会自动替换。',
 		}
 	}
 	return undefined

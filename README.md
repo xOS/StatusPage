@@ -120,6 +120,16 @@ GET /api/refresh?days=90&token=your-token
 GET /api/refresh?wait=1&token=your-token
 ```
 
+### `GET /api/refresh-status`
+
+查看最近一次快照刷新状态，用于排查 Cloudflare Pages 后台刷新失败、KV 未绑定或 UptimeRobot API 配置错误。调用需要同一个刷新令牌：
+
+```http
+GET /api/refresh-status?days=90&token=your-token
+```
+
+返回中的 `diagnostics.kvBound` 应为 `true`，`diagnostics.hasUptimeRobotApiKey` 应为 `true`。Cloudflare KV 中会先写入 `refresh:90` 记录刷新状态；只有完整快照成功生成后，才会写入 `status:90`。如果调用 `/api/refresh` 后 KV 仍完全为空，优先检查 Pages 项目的 KV 绑定是否在生产环境生效，并确认已经重新部署。
+
 ### `GET /api/info`
 
 新版 UI 使用的运行时站点配置接口，同时保留旧字段 `name`、`avatar`、`desc` 和 `rtl` 以兼容旧前端。
@@ -248,7 +258,7 @@ KV 里的键值不需要手动创建。首次成功调用 `/api/refresh` 后，�
 2. 进入 Pages 项目：`Settings` -> `Bindings` -> `Add` -> `KV namespace`。
 3. `Variable name` 填 `STATUS_CACHE`，`KV namespace` 选择刚创建的 namespace。
 4. 保存后重新部署 Cloudflare Pages。
-5. 部署完成后调用一次 `/api/refresh?token=your-token`，接口返回 `202` 后等待几十秒，再访问 `/api/status`；刷新成功后 KV 会自动写入 `status:90`。
+5. 部署完成后调用一次 `/api/refresh?token=your-token`，接口返回 `202` 后等待几十秒，再访问 `/api/refresh-status?token=your-token` 和 `/api/status`；刷新成功后 KV 会自动写入 `status:90`。
 
 Cloudflare Pages 没有本项目 Koa 进程那样的常驻 cron。需要提前刷新时，可用 Cloudflare Worker Cron、UptimeRobot、GitHub Actions 或其他外部定时器请求：
 
