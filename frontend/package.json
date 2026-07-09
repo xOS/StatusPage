@@ -80,7 +80,7 @@
     "unplugin-vue-components": "^0.27.0",
     "unplugin-vue-markdown": "^0.26.2",
     "unplugin-vue-router": "^0.8.8",
-    "vite": "^5.2.11",
+    "vite": "^6.4.3",
     "vite-auto-import-resolvers": "^3.2.1",
     "vite-layers": "^0.5.2",
     "vite-plugin-compression": "^0.5.1",
