@@ -48,7 +48,7 @@
         "cron": "^1.8.2",
         "date-fns": "^2.28.0",
         "dotenv": "^10.0.0",
-        "immutable": "^4.0.0",
+        "immutable": "^4.3.9",
         "js-yaml": "^4.1.0",
         "koa": "^2.13.4",
         "koa-router": "^10.1.1",
