@@ -43,7 +43,7 @@
     "@vueuse/core": "^10.9.0",
     "@vueuse/integrations": "^10.9.0",
     "axios": "^1.7.2",
-    "browserslist": "^4.23.0",
+    "browserslist": "^4.28.7",
     "c8": "^9.1.0",
     "changelogen": "^0.5.5",
     "consola": "^3.2.3",
